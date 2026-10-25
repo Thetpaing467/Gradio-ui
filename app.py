@@ -3,49 +3,58 @@ import subprocess
 import re
 import threading
 import time
+import os
 
 st.set_page_config(page_title="Link ထုတ်စက်", page_icon="🔗")
 st.title("🔗 Public Link ထုတ်စက်")
 
-if "public_link" not in st.session_state:
-    st.session_state.public_link = None
-if "log" not in st.session_state:
-    st.session_state.log = ""
+PORT = 8501  # Streamlit run နေတဲ့ port
+
+@st.cache_resource
+def get_tunnel_state():
+    # thread နဲ့ main နှစ်ခုလုံး မျှသုံးမယ့် state
+    return {"link": None, "log": "", "started": False, "proc": None}
+
+state = get_tunnel_state()
 
 def start_tunnel():
-    # Cloudflare ကို Download ဆွဲမယ်
-    subprocess.run("wget -q -O cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", shell=True)
-    subprocess.run("chmod +x cloudflared", shell=True)
-    
-    # Tunnel ကို ဖွင့်မယ်
+    if not os.path.exists("cloudflared"):
+        subprocess.run(
+            "wget -q -O cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+            shell=True,
+        )
+        subprocess.run("chmod +x cloudflared", shell=True)
+
     proc = subprocess.Popen(
-        ["./cloudflared", "tunnel", "--url", "http://localhost:8501"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        ["./cloudflared", "tunnel", "--url", f"http://localhost:{PORT}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
     )
-    
+    state["proc"] = proc
+
     for line in proc.stdout:
-        st.session_state.log += line # log ကို သိမ်းထားမယ်
+        state["log"] += line
         match = re.search(r"https://[a-z0-9\-]+\.trycloudflare\.com", line)
-        if match:
-            st.session_state.public_link = match.group(0)
-            break
+        if match and not state["link"]:
+            state["link"] = match.group(0)
+        # break မလုပ်ဘူး - pipe ဆက်ဖတ်နေမှ process မရပ်မှာ
 
 if st.button("🚀 Link ထုတ်မယ်"):
-    if st.session_state.public_link is None:
-        with st.spinner("Link ထုတ်နေတယ်... ခဏစောင့်ပါ (၃၀ စက္ကန့်လောက် ကြာနိုင်တယ်)"):
-            thread = threading.Thread(target=start_tunnel)
-            thread.start()
-            
-            # ၃၀ စက္ကန့်အထိ စောင့်ကြည့်မယ်
-            for _ in range(30):
-                if st.session_state.public_link:
-                    break
-                time.sleep(1)
-    
-    if st.session_state.public_link:
-        st.success("✅ အောင်မြင်ပါတယ်!")
-        st.markdown(f"🔗 **Public Link:** [{st.session_state.public_link}]({st.session_state.public_link})")
-    else:
-        st.warning("⚠️ Link မရသေးပါ။ အောက်မှာ Log ကို စစ်ကြည့်ပါ။")
-        with st.expander("🛠️ Log ကြည့်ရန်"):
-            st.text(st.session_state.log[-1000:]) # Log နောက်ဆုံးအပိုင်းကို ပြမယ်
+    if not state["started"]:
+        state["started"] = True
+        threading.Thread(target=start_tunnel, daemon=True).start()
+
+    with st.spinner("Link ထုတ်နေတယ်... ခဏစောင့်ပါ (၃၀ စက္ကန့်လောက် ကြာနိုင်တယ်)"):
+        for _ in range(60):
+            if state["link"]:
+                break
+            time.sleep(1)
+
+if state["link"]:
+    st.success("✅ အောင်မြင်ပါတယ်!")
+    st.markdown(f"🔗 **Public Link:** [{state['link']}]({state['link']})")
+elif state["started"]:
+    st.warning("⚠️ Link မရသေးပါ။ ခဏနေရင် ထပ်နှိပ်ပါ၊ ဒါမှမဟုတ် Log ကို စစ်ကြည့်ပါ။")
+    with st.expander("🛠️ Log ကြည့်ရန်"):
+        st.text(state["log"][-1000:])
