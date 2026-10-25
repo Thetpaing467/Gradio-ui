@@ -7,7 +7,6 @@ import time
 st.set_page_config(page_title="Kaggle Link ထုတ်စက်", page_icon="🔗")
 st.title("🔗 Kaggle Link ထုတ်စက်")
 
-# ⚠️ ခင်ဗျားရဲ့ Kaggle Username နဲ့ Key
 os.environ['KAGGLE_USERNAME'] = "thetuaiiaa"
 os.environ['KAGGLE_KEY'] = "e949c9ede1ed6d03eda8811b5421a262"
 
@@ -16,9 +15,11 @@ KERNEL_NAME = "thetuaiiaa/notebook720a308f75"
 if st.button("🚀 စတင်မယ် (Link ထုတ်မယ်)"):
     with st.spinner("Kaggle မှာ Run နေတယ်... ခဏစောင့်ပါ (စက္ကန့် ၃၀-၆၀ လောက် ကြာနိုင်တယ်)"):
         try:
-            # 1. Kaggle CLI ကို သုံးပြီး Run ခိုင်းမယ် (Terminal အတိုင်း)
-            # ဒီနေရာမှာ command ကို list အနေနဲ့ ပေးတဲ့အတွက် error မတက်တော့ပါဘူး
-            res = subprocess.run(["kaggle", "kernels", "push", KERNEL_NAME], capture_output=True, text=True)
+            # ⚠️ ဒီနေရာမှာ '--path' ကို ထည့်လိုက်ပါပြီ
+            res = subprocess.run(
+                ["kaggle", "kernels", "push", "--path", KERNEL_NAME], 
+                capture_output=True, text=True
+            )
             
             if res.returncode != 0:
                 st.error(f"❌ Kaggle Run မရပါ:\n{res.stderr}")
@@ -26,8 +27,10 @@ if st.button("🚀 စတင်မယ် (Link ထုတ်မယ်)"):
                 st.info("✅ Kaggle က Run ပြီးပါပြီ။ Link ကို စောင့်နေတယ်...")
                 time.sleep(25) 
                 
-                # 2. Log ကို ဆွဲထုတ်မယ်
-                out_res = subprocess.run(["kaggle", "kernels", "output", KERNEL_NAME, "-p", "./output"], capture_output=True, text=True)
+                out_res = subprocess.run(
+                    ["kaggle", "kernels", "output", KERNEL_NAME, "-p", "./output"], 
+                    capture_output=True, text=True
+                )
                 
                 link = None
                 if os.path.exists("./output"):
