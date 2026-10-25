@@ -12,7 +12,6 @@ from kaggle.api.kaggle_api_extended import KaggleApi
 st.set_page_config(page_title="Kaggle Link ထုတ်စက်", page_icon="🔗")
 st.title("🔗 Kaggle Public Link ထုတ်စက်")
 
-# Kaggle ထဲမှာ run မယ့် script (သင့် notebook cell + ntfy ပို့တဲ့အပိုင်း)
 KAGGLE_SCRIPT = r'''
 import os, re, sys, time, subprocess, threading, urllib.request
 from importlib import metadata
@@ -229,15 +228,13 @@ if st.button("🚀 Kaggle မှာ run ပြီး Link ယူမယ်"):
     api = KaggleApi()
     api.authenticate()
     try:
-        res = api.kernels_push(folder)
-        st.info("Kaggle ဆီ push ပြီးပါပြီ၊ run နေပါပြီ...")
-        st.caption(str(res))
+        api.kernels_push(folder)
     except Exception as e:
         st.error(f"Push မအောင်မြင်ပါ: {e}")
         st.stop()
 
     link = None
-    with st.spinner("Link စောင့်နေတယ်... (၃–၈ မိနစ်ကြာနိုင်)"):
+    with st.spinner("Kaggle မှာ run နေတယ်... Link စောင့်နေတယ် (၃–၈ မိနစ်ကြာနိုင်)"):
         for _ in range(120):  # 5s × 120 = 10 မိနစ်
             try:
                 r = requests.get(
