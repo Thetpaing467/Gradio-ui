@@ -1,22 +1,27 @@
-import os, json, time, tempfile, hashlib
+import os, json, time, tempfile
 import requests
 import streamlit as st
 
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
 
+# Colab notebook ကို save ပြီး ရတဲ့ share link ကို ဒီမှာထည့်ပါ (မရှိသေးရင် "" ထား)
+COLAB_URL = ""
+
+# link မှတ်ထားမယ့် ntfy topic များ (platform တစ်ခုချင်းစီ သီးခြား)
+TOPIC_KAGGLE = "kgl-k-7f3a9c2e51b84d06"
+TOPIC_COLAB = "kgl-c-2d8e41b7a06f93c5"
+
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 from kaggle.api.kaggle_api_extended import KaggleApi
 
-# link မှတ်ထားမယ့် ntfy topic (အမြဲတူတယ်၊ ခန့်မှန်းလို့မရအောင် key hash သုံးထား)
-STATE_TOPIC = "kgl-" + hashlib.sha256(KAGGLE_KEY.encode()).hexdigest()[:16]
 NAMES = {"pinggy": "Pinggy", "cloudflare": "Cloudflare", "ngrok": "ngrok"}
 
-st.set_page_config(page_title="Kaggle Link ထုတ်စက်", page_icon="🔗")
-st.title("🔗 Kaggle Public Link ထုတ်စက်")
+st.set_page_config(page_title="Link ထုတ်စက်", page_icon="🔗")
+st.title("🔗 Public Link ထုတ်စက်")
 
-KAGGLE_SCRIPT = r'''
+SCRIPT = r'''
 import os, re, sys, time, subprocess, threading, urllib.request
 from importlib import metadata
 import requests
@@ -24,11 +29,12 @@ import requests
 NTFY_TOPIC = "__TOPIC__"
 NGROK_TOKEN = "__NGROK__"
 REPO_URL = "https://github.com/Thetpaing467/new.git"
-REPO_DIR = "/kaggle/working/new"
+BASE = "/kaggle/working" if os.path.isdir("/kaggle/working") else "/content"
+REPO_DIR = f"{BASE}/new"
 APP_FILE = "app.py"
 PORT = 7860
-LOG = "/kaggle/working/app.log"
-CF = "/kaggle/working/cloudflared"
+LOG = f"{BASE}/app.log"
+CF = f"{BASE}/cloudflared"
 T0 = time.time()
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -57,7 +63,7 @@ def post(kind, text):
         print("ntfy error:", e)
 
 
-post("start", "1")  # run အသစ်စပြီ (အရင် link တွေကို မမှန်တော့ဘူးလို့ သတ်မှတ်)
+post("start", "1")
 
 sh("pkill -f '[c]loudflared tunnel' ; pkill -f '[p]ython.*app.py'")
 time.sleep(1)
@@ -241,14 +247,16 @@ while True:
 '''
 
 
-# ------------------------------------------------------------ helper functions
-def read_state():
+# ------------------------------------------------------------ helpers
+def build_script(topic, ngrok_token):
+    return SCRIPT.replace("__TOPIC__", topic).replace("__NGROK__", ngrok_token.strip())
+
+
+def read_state(topic):
     """ntfy ထဲက နောက်ဆုံး run ရဲ့ အခြေအနေကို ဖတ်မယ်"""
     links, ready, error, start_t = {}, False, None, 0
     try:
-        r = requests.get(
-            f"https://ntfy.sh/{STATE_TOPIC}/json?poll=1&since=all", timeout=10
-        )
+        r = requests.get(f"https://ntfy.sh/{topic}/json?poll=1&since=all", timeout=10)
         for line in r.text.strip().splitlines():
             try:
                 d = json.loads(line)
@@ -301,12 +309,43 @@ def show_final(links):
         st.code(v)
 
 
+def check_existing(topic, status):
+    links, _, _, _ = read_state(topic)
+    alive = {k: v for k, v in links.items() if is_alive(v)}
+    if alive:
+        status.success("♻️ အရင် link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
+        show_final(alive)
+        return True
+    return False
+
+
+def wait_for_link(topic, fresh_after, status, box, iters):
+    for _ in range(iters):
+        links, ready, error, start_t = read_state(topic)
+        fresh = start_t > 0 and start_t >= fresh_after
+        if fresh and links:
+            box.markdown(links_md(links))
+            if not ready:
+                status.info("⏳ Link ရပါပြီ၊ App စတက်နေတယ်... ခဏနေမှ ဖွင့်ပါ")
+        if fresh and error:
+            status.error(f"❌ Error: {error}")
+            return True
+        if fresh and ready and links:
+            alive = {k: v for k, v in links.items() if is_alive(v)}
+            if alive:
+                status.success("✅ App အဆင်သင့်ဖြစ်ပါပြီ! VPN မလိုဘဲ ပွင့်တဲ့ link ကို သုံးပါ")
+                box.empty()
+                show_final(alive)
+                return True
+        time.sleep(2)
+    return False
+
+
+# ------------------------------------------------------------ Kaggle
 def push_kernel(api, slug, gpu, ngrok_token):
-    code = (KAGGLE_SCRIPT.replace("__TOPIC__", STATE_TOPIC)
-                         .replace("__NGROK__", ngrok_token.strip()))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
-        f.write(code)
+        f.write(build_script(TOPIC_KAGGLE, ngrok_token))
     meta = {
         "id": f"{KAGGLE_USERNAME}/{slug}",
         "title": slug,
@@ -322,25 +361,15 @@ def push_kernel(api, slug, gpu, ngrok_token):
     api.kernels_push(folder)
 
 
-def run(force, slug, gpu, ngrok_token):
-    status = st.empty()
-    box = st.empty()
-
+def run_kaggle(force, slug, gpu, ngrok_token):
+    status, box = st.empty(), st.empty()
     api = KaggleApi()
     api.authenticate()
 
-    # ၁။ အရင် link သုံးလို့ရသေးလား
-    if not force:
-        links, ready, error, _ = read_state()
-        alive = {k: v for k, v in links.items() if is_alive(v)}
-        if alive:
-            status.success("♻️ အရင် link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
-            show_final(alive)
-            return
+    if not force and check_existing(TOPIC_KAGGLE, status):
+        return
 
-    # ၂။ Kaggle session run နေသေးလား
-    pushed = False
-    t_push = 0
+    pushed, t_push = False, 0
     if not force and kernel_busy(api, slug):
         status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — link စောင့်နေတယ်...")
     else:
@@ -349,46 +378,61 @@ def run(force, slug, gpu, ngrok_token):
         except Exception as e:
             status.error(f"Push မအောင်မြင်ပါ: {e}")
             return
-        pushed = True
-        t_push = time.time()
+        pushed, t_push = True, time.time()
         status.info("⏳ Kaggle စတင်နေတယ်...")
 
-    # ၃။ link အသစ် စောင့်မယ် (၂ စက္ကန့်တစ်ခါ၊ ၁၀ မိနစ်အထိ)
-    for _ in range(300):
-        links, ready, error, start_t = read_state()
-        fresh = (start_t >= t_push - 10) if pushed else bool(start_t)
-        if fresh and links:
-            box.markdown(links_md(links))
-            if not ready:
-                status.info("⏳ Link ရပါပြီ၊ App စတက်နေတယ်... ခဏနေမှ ဖွင့်ပါ")
-        if fresh and error:
-            status.error(f"❌ Kaggle မှာ error: {error}")
-            return
-        if fresh and ready and links:
-            alive = {k: v for k, v in links.items() if is_alive(v)}
-            if alive:
-                status.success("✅ App အဆင်သင့်ဖြစ်ပါပြီ! VPN မလိုဘဲ ပွင့်တဲ့ link ကို သုံးပါ")
-                box.empty()
-                show_final(alive)
-                return
-        time.sleep(2)
-
+    if wait_for_link(TOPIC_KAGGLE, (t_push - 10) if pushed else 0, status, box, 300):
+        return
     if pushed:
         status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
     else:
-        status.warning(
-            "Kaggle session ကျန်နေပေမဲ့ link မရပါ။ Kaggle မှာ Stop နှိပ်ပါ၊ "
-            "ဒါမှမဟုတ် '🔄 အသစ်အတင်းထုတ်မယ်' ကို နှိပ်ပါ။"
-        )
+        status.warning("Kaggle session ကျန်နေပေမဲ့ link မရပါ။ Kaggle မှာ Stop နှိပ်ပါ၊ "
+                       "ဒါမှမဟုတ် '🔄 အသစ်အတင်းထုတ်မယ်' ကို နှိပ်ပါ။")
+
+
+# ------------------------------------------------------------ Colab
+def run_colab():
+    status, box = st.empty(), st.empty()
+
+    if check_existing(TOPIC_COLAB, status):
+        return
+
+    t0 = time.time()
+    status.info("⏳ Colab ကို ဖွင့်ပြီး **Run all** (Ctrl+F9) နှိပ်ပါ။ Link စောင့်နေတယ်...")
+    if wait_for_link(TOPIC_COLAB, t0 - 5, status, box, 450):  # ၁၅ မိနစ်
+        return
+    status.warning("Link မရသေးပါ။ Colab မှာ cell run နေလား၊ error ပေါ်နေလား ကြည့်ပါ။")
 
 
 # ------------------------------------------------------------ UI
-slug = st.text_input("Kernel နာမည် (အင်္ဂလိပ်စာလုံး၊ ဂဏန်း၊ - သာ)", "my-link-runner")
-gpu = st.checkbox("GPU ဖွင့်မယ်", value=True)
+platform = st.radio("Platform", ["Kaggle", "Colab"], horizontal=True)
 ngrok_token = st.text_input("ngrok authtoken (မရှိရင် ကျော်ပါ)", type="password")
 
-if st.button("🚀 Link ယူမယ် (ရှိပြီးသား သုံးလို့ရရင် ပြန်သုံးမယ်)"):
-    run(False, slug, gpu, ngrok_token)
+if platform == "Kaggle":
+    slug = st.text_input("Kernel နာမည် (အင်္ဂလိပ်စာလုံး၊ ဂဏန်း၊ - သာ)", "my-link-runner")
+    gpu = st.checkbox("GPU ဖွင့်မယ်", value=True)
 
-if st.button("🔄 အသစ်အတင်းထုတ်မယ်"):
-    run(True, slug, gpu, ngrok_token)
+    if st.button("🚀 Link ယူမယ် (ရှိပြီးသား သုံးလို့ရရင် ပြန်သုံးမယ်)"):
+        run_kaggle(False, slug, gpu, ngrok_token)
+    if st.button("🔄 အသစ်အတင်းထုတ်မယ်"):
+        run_kaggle(True, slug, gpu, ngrok_token)
+
+else:
+    with st.expander("📋 Colab setup (တစ်ခါပဲလုပ်ရ)"):
+        st.markdown(
+            "1. [colab.new](https://colab.new) ကို ဖွင့်ပါ။\n"
+            "2. အောက်က code ကို copy ကူးပြီး cell ထဲ paste လုပ်ပါ။\n"
+            "3. Runtime → Change runtime type → **T4 GPU** ရွေးပါ။\n"
+            "4. File → Save လုပ်ပြီး Share → **Anyone with the link** ကို ယူပါ။\n"
+            "5. အဲဒီ link ကို `app.py` ထဲက `COLAB_URL` မှာ ထည့်ပြီး commit လုပ်ပါ။\n"
+            "6. နောက်ပိုင်း ဒီကနေ Colab ဖွင့်၊ **Run all** နှိပ်ရုံပါပဲ။"
+        )
+        st.code(build_script(TOPIC_COLAB, ngrok_token), language="python")
+
+    if COLAB_URL:
+        st.link_button("📂 Colab ဖွင့်မယ်", COLAB_URL)
+    else:
+        st.caption("COLAB_URL မထည့်ရသေးပါ — အပေါ်က setup အတိုင်း လုပ်ပါ။")
+
+    if st.button("🚀 Link ယူမယ် (Colab မှာ Run all နှိပ်ပြီးမှ)"):
+        run_colab()
