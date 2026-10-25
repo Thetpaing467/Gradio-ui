@@ -1,54 +1,43 @@
 import streamlit as st
 import subprocess
-import os
 import re
+import threading
 import time
 
-st.set_page_config(page_title="Kaggle Link ထုတ်စက်", page_icon="🔗")
-st.title("🔗 Kaggle Link ထုတ်စက်")
+st.set_page_config(page_title="Link ထုတ်စက်", page_icon="🔗")
+st.title("🔗 Public Link ထုတ်စက်")
 
-os.environ['KAGGLE_USERNAME'] = "thetuaiiaa"
-os.environ['KAGGLE_KEY'] = "e949c9ede1ed6d03eda8811b5421a262"
+# Link ကို သိမ်းထားဖို့
+if "public_link" not in st.session_state:
+    st.session_state.public_link = None
 
-KERNEL_NAME = "thetuaiiaa/notebook720a308f75"
+def start_tunnel():
+    # Cloudflare ကို Download ဆွဲမယ်
+    subprocess.run("wget -q -O cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", shell=True)
+    subprocess.run("chmod +x cloudflared", shell=True)
+    
+    # Tunnel ကို ဖွင့်မယ်
+    proc = subprocess.Popen(
+        ["./cloudflared", "tunnel", "--url", "http://localhost:8501"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    
+    for line in proc.stdout:
+        match = re.search(r"https://[a-z0-9\-]+\.trycloudflare\.com", line)
+        if match:
+            st.session_state.public_link = match.group(0)
+            break
 
-if st.button("🚀 စတင်မယ် (Link ထုတ်မယ်)"):
-    with st.spinner("Kaggle မှာ Run နေတယ်... ခဏစောင့်ပါ (စက္ကန့် ၃၀-၆၀ လောက် ကြာနိုင်တယ်)"):
-        try:
-            # ⚠️ ဒီနေရာမှာ '--path' ကို ထည့်လိုက်ပါပြီ
-            res = subprocess.run(
-                ["kaggle", "kernels", "push", "--path", KERNEL_NAME], 
-                capture_output=True, text=True
-            )
-            
-            if res.returncode != 0:
-                st.error(f"❌ Kaggle Run မရပါ:\n{res.stderr}")
-            else:
-                st.info("✅ Kaggle က Run ပြီးပါပြီ။ Link ကို စောင့်နေတယ်...")
-                time.sleep(25) 
-                
-                out_res = subprocess.run(
-                    ["kaggle", "kernels", "output", KERNEL_NAME, "-p", "./output"], 
-                    capture_output=True, text=True
-                )
-                
-                link = None
-                if os.path.exists("./output"):
-                    for f in os.listdir("./output"):
-                        try:
-                            with open(os.path.join("./output", f), "r", errors="ignore") as file:
-                                content = file.read()
-                                match = re.search(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com", content)
-                                if match:
-                                    link = match.group(0)
-                                    break
-                        except:
-                            pass
-                
-                if link:
-                    st.success("✅ အောင်မြင်ပါတယ်!")
-                    st.markdown(f"🔗 **Public Link:** [{link}]({link})")
-                else:
-                    st.warning("⚠️ Link မတွေ့ပါ။ Kaggle က မထုတ်ပေးသေးဘူး ဖြစ်နိုင်ပါတယ်။ (ခဏနေပြီး ပြန်စမ်းပါ)")
-        except Exception as e:
-            st.error(f"Error: {e}")
+if st.button("🚀 Link ထုတ်မယ်"):
+    if st.session_state.public_link is None:
+        with st.spinner("Link ထုတ်နေတယ်... ခဏစောင့်ပါ (၁၀ စက္ကန့်လောက်)"):
+            # နောက်ခံမှာ run မယ်
+            thread = threading.Thread(target=start_tunnel)
+            thread.start()
+            thread.join(timeout=15) # ၁၅ စက္ကန့် စောင့်မယ်
+    
+    if st.session_state.public_link:
+        st.success("✅ အောင်မြင်ပါတယ်!")
+        st.markdown(f"🔗 **Public Link:** [{st.session_state.public_link}]({st.session_state.public_link})")
+    else:
+        st.warning("⚠️ Link မရသေးပါ။ ခဏနေပြီး ပြန်စမ်းပါ။")
