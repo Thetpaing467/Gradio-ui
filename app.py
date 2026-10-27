@@ -2,27 +2,32 @@ import os, json, time, tempfile
 import requests
 import streamlit as st
 
-KAGGLE_USERNAME = "thetuaiaa"
-KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
+# ---------------- ဒီနေရာ ပြင်ပါ ----------------
+# Key ကို code ထဲ တိုက်ရိုက်မရေးပါနဲ့။ Streamlit secrets (KAGGLE_USERNAME / KAGGLE_KEY) မှာထည့်ပါ
+KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
+KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", "ဒီမှာ-key-အသစ်ထည့်ပါ"))
 SLUG = "my-link-runner"
 GPU_ENABLED = False   # app crash ဖြစ်ရင် True ပြောင်းကြည့်ပါ
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
-SUBDOMAIN = ""        # ပုံသေနာမည်မလိုရင် ဗလာထားပါ (random link ရမယ်)
+SUBDOMAIN = ""        # Serveo ပုံသေနာမည်မလိုရင် ဗလာထားပါ
+NGROK_TOKEN = ""      # ngrok account token ရှိရင်ထည့်ပါ (မရှိရင် ဗလာ)
+# -----------------------------------------------
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 from kaggle.api.kaggle_api_extended import KaggleApi
 
-st.set_page_config(page_title="Serveo Link ထုတ်စက်", page_icon="🔗")
-st.title("🔗 Public Link ထုတ်စက် (Serveo)")
+st.set_page_config(page_title="Link ထုတ်စက်", page_icon="🔗")
+st.title("🔗 Public Link ထုတ်စက် (Multi Tunnel)")
 
 KAGGLE_SCRIPT = r'''
-import os, re, sys, time, subprocess, threading, urllib.request
+import os, re, sys, time, subprocess, threading, urllib.request, tarfile, stat
 from importlib import metadata
 import requests
 
 NTFY_TOPIC = "__TOPIC__"
 SUB = "__SUB__"
+NGROK_TOKEN = "__NGROK__"
 REPO_URL = "https://github.com/Thetpaing467/new.git"
 REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
@@ -30,6 +35,11 @@ PORT = 7860
 LOG = "/kaggle/working/app.log"
 T0 = time.time()
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "ExitOnForwardFailure=yes"]
 
 
 def say(msg):
@@ -57,52 +67,161 @@ def post(kind, text):
 
 
 post("start", "1")
-
 sh("pkill -f '[p]ython.*app.py'")
 time.sleep(1)
 
 
-# ---------------------------------------------------------- Serveo tunnel (အစမှာတင် စ)
-def run_serveo():
+# ============================================================ tunnel အားလုံး
+def tunnel_loop(name, build_cmd, rx, fmt=None, wait=60, prep=None):
+    """tunnel တစ်ခုကို run မယ်။ link ထွက်ရင် ntfy ပို့မယ်။ ပြတ်ရင် ပြန်ချိတ်မယ်။"""
+    try:
+        if prep and not prep():
+            say(f"{name} ကျော်လိုက်တယ် (မအောင်မြင်)")
+            return
+    except Exception as e:
+        say(f"{name} prep error: {e}")
+        return
+    rx = re.compile(rx)
+    fails = 0
+    while True:
+        try:
+            say(f"{name} ချိတ်နေတယ်")
+            p = subprocess.Popen(build_cmd(), stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            state = {"got": False}
+            timer = threading.Timer(wait, lambda: None if state["got"] else p.kill())
+            timer.daemon = True
+            timer.start()
+            for line in p.stdout:
+                line = ANSI.sub("", line)
+                m = rx.search(line)
+                if m:
+                    url = fmt(m) if fmt else m.group(0)
+                    state["got"] = True
+                    say(f"{name} ✅ {url}")
+                    post("tun", f"{name}={url}")
+                elif not state["got"]:
+                    print(f"[{name}] {line.rstrip()[:200]}", flush=True)
+            timer.cancel()
+            p.wait()
+        except Exception as e:
+            say(f"{name} error: {e}")
+            state = {"got": False}
+        fails = 0 if state["got"] else fails + 1
+        say(f"{name} ပြတ်သွားတယ် — ပြန်ချိတ်မယ် (fail {fails})")
+        if fails >= 6:
+            say(f"{name} ၆ ကြိမ်ဆက်ရှုံး — ရပ်လိုက်တယ်")
+            return
+        time.sleep(3 if state["got"] else min(5 * fails, 30))
+
+
+def need_ssh():
     if sh("which ssh")[0] != 0:
         sh("apt-get update -qq && apt-get install -y -qq openssh-client")
-    fails = 0
-    while True:   # ပြတ်သွားရင် ပြန်ချိတ်မယ်
-        use_fixed = bool(SUB) and fails < 3
-        target = f"{SUB}:80:localhost:{PORT}" if use_fixed else f"80:localhost:{PORT}"
-        say(f"serveo ချိတ်နေတယ် ({'ပုံသေ ' + SUB if use_fixed else 'random'})")
-        p = subprocess.Popen(
-            ["ssh",
-             "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             "-o", "ServerAliveInterval=30",
-             "-o", "ExitOnForwardFailure=yes",
-             "-R", target, "serveo.net"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True)
-        state = {"got": False}
-        # ၄၀ စက္ကန့်အတွင်း link မရရင် ssh ကို သတ်ပြီး ပြန်စ
-        timer = threading.Timer(40, lambda: None if state["got"] else p.kill())
-        timer.daemon = True
-        timer.start()
-        for line in p.stdout:
-            line = ANSI.sub("", line)
-            print(line, end="", flush=True)
-            m = re.search(r"https://[a-z0-9\-]+\.serveo(?:usercontent)?\.(?:net|com)", line)
-            if m and not state["got"]:
-                state["got"] = True
-                say("serveo ✅")
-                post("serveo", m.group(0))
-        timer.cancel()
-        p.wait()
-        fails = 0 if state["got"] else fails + 1
-        say("serveo ပြတ်သွားတယ် — ပြန်ချိတ်မယ်")
-        time.sleep(3 if state["got"] else 5)
+    return sh("which ssh")[0] == 0
 
 
-threading.Thread(target=run_serveo, daemon=True).start()
+NODE_LOCK = threading.Lock()
 
-# ---------------------------------------------------------- app ပြင်ဆင်ခြင်း
+
+def need_node():
+    with NODE_LOCK:
+        if sh("which npx")[0] != 0:
+            say("nodejs/npm သွင်းနေတယ်...")
+            sh("apt-get update -qq")
+            sh("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm")
+        return sh("which npx")[0] == 0
+
+
+def download(url, dest):
+    r = requests.get(url, timeout=120, stream=True, allow_redirects=True)
+    r.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in r.iter_content(1 << 20):
+            f.write(chunk)
+
+
+CF_BIN = "/kaggle/working/cloudflared"
+
+
+def need_cloudflared():
+    if not os.path.exists(CF_BIN):
+        download("https://github.com/cloudflare/cloudflared/releases/latest/download/"
+                 "cloudflared-linux-amd64", CF_BIN)
+        os.chmod(CF_BIN, os.stat(CF_BIN).st_mode | stat.S_IEXEC)
+    return True
+
+
+BORE_BIN = "/kaggle/working/bore"
+
+
+def need_bore():
+    if not os.path.exists(BORE_BIN):
+        tgz = "/kaggle/working/bore.tgz"
+        download("https://github.com/ekzhang/bore/releases/download/v0.5.1/"
+                 "bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz", tgz)
+        with tarfile.open(tgz) as t:
+            t.extractall("/kaggle/working")
+        os.chmod(BORE_BIN, os.stat(BORE_BIN).st_mode | stat.S_IEXEC)
+    return True
+
+
+def ngrok_thread():
+    try:
+        sh(f"{sys.executable} -m pip install -q pyngrok")
+        from pyngrok import ngrok
+        ngrok.set_auth_token(NGROK_TOKEN)
+        while True:
+            try:
+                t = ngrok.connect(PORT, "http")
+                url = t.public_url.replace("http://", "https://")
+                say(f"ngrok ✅ {url}")
+                post("tun", f"ngrok={url}")
+                while True:
+                    time.sleep(30)
+                    if not ngrok.get_tunnels():
+                        break
+            except Exception as e:
+                say(f"ngrok error: {e}")
+                time.sleep(10)
+    except Exception as e:
+        say(f"ngrok ကျော်: {e}")
+
+
+TUNNELS = [
+    # (name, build_cmd, regex, fmt, wait, prep)
+    ("pinggy",
+     lambda: ["ssh"] + SSH_OPTS + ["-p", "443", f"-R0:localhost:{PORT}", "a.pinggy.io"],
+     r"https://[a-zA-Z0-9\-\.]+\.pinggy\.(?:link|online|io)", None, 60, need_ssh),
+    ("localhost.run",
+     lambda: ["ssh"] + SSH_OPTS + ["-R", f"80:localhost:{PORT}", "nokey@localhost.run"],
+     r"https://[a-z0-9]+\.lhr\.life", None, 60, need_ssh),
+    ("serveo",
+     lambda: ["ssh"] + SSH_OPTS + ["-R", (f"{SUB}:80:localhost:{PORT}" if SUB else f"80:localhost:{PORT}"),
+                                   "serveo.net"],
+     r"https://[a-z0-9\-]+\.serveo(?:usercontent)?\.(?:net|com)", None, 40, need_ssh),
+    ("cloudflare",
+     lambda: [CF_BIN, "tunnel", "--url", f"http://localhost:{PORT}",
+              "--no-autoupdate", "--protocol", "http2"],
+     r"https://[a-z0-9\-]+\.trycloudflare\.com", None, 90, need_cloudflared),
+    ("bore",
+     lambda: [BORE_BIN, "local", str(PORT), "--to", "bore.pub"],
+     r"bore\.pub:(\d+)", lambda m: f"http://bore.pub:{m.group(1)}", 60, need_bore),
+    ("tunnelmole",
+     lambda: ["npx", "--yes", "tunnelmole", str(PORT)],
+     r"https://[a-z0-9\-]+\.tunnelmole\.(?:net|com)", None, 120, need_node),
+    ("localtunnel",
+     lambda: ["npx", "--yes", "localtunnel", "--port", str(PORT)],
+     r"https://[a-z0-9\-]+\.loca\.lt", None, 120, need_node),
+]
+
+for name, cmd, rx, fmt, wait, prep in TUNNELS:
+    threading.Thread(target=tunnel_loop, args=(name, cmd, rx, fmt, wait, prep),
+                     daemon=True).start()
+if NGROK_TOKEN:
+    threading.Thread(target=ngrok_thread, daemon=True).start()
+
+# ============================================================ app ပြင်ဆင်ခြင်း
 RES = {}
 
 
@@ -187,46 +306,68 @@ if fonts:
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
 env = dict(os.environ, PORT=str(PORT))
-app_proc = subprocess.Popen([sys.executable, "-u", APP_FILE],
-                            stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
-say("app စတင်နေတယ်...")
 
-started = False
-for _ in range(360):
-    if app_proc.poll() is not None:
-        print(f"❌ App crash (exit {app_proc.returncode}) — log:\n")
-        print(tail_log())
-        post("error", "App crash: " + tail_log(400))
-        break
+
+def start_app():
+    return subprocess.Popen([sys.executable, "-u", APP_FILE],
+                            stdout=open(LOG, "a"), stderr=subprocess.STDOUT, env=env)
+
+
+def app_ok(timeout=5):
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=1)
-        started = True
-        say("app ✅")
-        post("ready", "1")
-        break
+        urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=timeout)
+        return True
     except Exception:
+        return False
+
+
+def wait_up(proc, secs=180):
+    for _ in range(int(secs * 2)):
+        if proc.poll() is not None or app_ok(1):
+            break
         time.sleep(0.5)
+    return app_ok()
+
+
+app_proc = start_app()
+say("app စတင်နေတယ်...")
+if wait_up(app_proc, 180):
+    say("app ✅")
+    post("ready", "1")
 else:
     print("⚠️ App မတက်သေးဘူး — log:\n")
     print(tail_log())
     post("error", "App မတက်ပါ: " + tail_log(400))
 
-if not started:
-    raise SystemExit("App မတက်လို့ ရပ်လိုက်တယ်။")
-
+# ============================================================ watchdog
+crashes, bad = 0, 0
 print(f"Running... log: {LOG}")
 while True:
-    time.sleep(30)
+    time.sleep(10)
     if app_proc.poll() is not None:
-        print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode}) — log:\n")
-        print(tail_log())
-        break
+        crashes += 1
+        say(f"❌ App ရပ်သွားတယ် (exit {app_proc.returncode}) — ပြန်စမယ် #{crashes}")
+        print(tail_log(1500))
+        time.sleep(min(5 * crashes, 30))
+        app_proc = start_app()
+        bad = 0
+        if wait_up(app_proc, 120):
+            say("app ပြန်တက်ပြီ ✅")
+            post("ready", "1")
+        continue
+    # process ရှိပေမဲ့ မတုံ့ပြန်ရင် (hang) ၃ ကြိမ်ဆက်ရှုံးမှ သတ်မယ်
+    bad = 0 if app_ok(8) else bad + 1
+    if bad >= 3:
+        say("⚠️ App hang ဖြစ်နေတယ် — kill ပြီး ပြန်စမယ်")
+        app_proc.kill()
+        bad = 0
 '''
 
 
 # ------------------------------------------------------------ helpers
 def read_state():
-    link, ready, error, start_t = None, False, None, 0
+    """ntfy ကနေ link အားလုံး (tunnel နာမည်အလိုက် နောက်ဆုံး link) ကို ဖတ်"""
+    links, ready, error, start_t = {}, False, None, 0
     try:
         r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
         for line in r.text.strip().splitlines():
@@ -241,24 +382,29 @@ def read_state():
                 continue
             kind, val = msg.split("|", 1)
             if kind == "start":
-                link, ready, error, start_t = None, False, None, d.get("time", 0)
-            elif kind == "serveo":
-                link = val
+                links, ready, error, start_t = {}, False, None, d.get("time", 0)
+            elif kind == "tun" and "=" in val:
+                name, url = val.split("=", 1)
+                links[name] = url
             elif kind == "ready":
                 ready = True
             elif kind == "error":
                 error = val
     except Exception:
         pass
-    return link, ready, error, start_t
+    return links, ready, error, start_t
 
 
 def is_alive(url):
     try:
-        r = requests.get(url, timeout=8)
-        return r.status_code == 200
+        r = requests.get(url, timeout=8, allow_redirects=True)
+        return r.status_code < 500 or r.status_code == 511
     except Exception:
         return False
+
+
+def alive_links(links):
+    return {n: u for n, u in links.items() if is_alive(u)}
 
 
 def kernel_busy(api):
@@ -270,13 +416,22 @@ def kernel_busy(api):
         return False
 
 
-def show_link(link):
-    st.markdown(f"🔗 **Public Link:** [{link}]({link})")
-    st.code(link)
+def show_links(links, checked=None):
+    st.markdown("### 🔗 Public Links")
+    st.caption("ဖုန်းမှာ VPN ပိတ်ပြီး တစ်ခုချင်း နှိပ်စမ်းကြည့်ပါ၊ ဖွင့်လို့ရတာကို သုံးပါ။")
+    for name, url in links.items():
+        mark = ""
+        if checked is not None:
+            mark = " ✅" if name in checked else " ❔"
+        st.markdown(f"**{name}**{mark}")
+        st.markdown(f"[{url}]({url})")
+        st.code(url)
 
 
 def push_kernel(api):
-    code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC).replace("__SUB__", SUBDOMAIN)
+    code = (KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
+            .replace("__SUB__", SUBDOMAIN)
+            .replace("__NGROK__", NGROK_TOKEN))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
@@ -302,11 +457,13 @@ def run(force):
 
     # ၁။ အရင် link သုံးလို့ရသေးရင် ပြန်သုံး
     if not force:
-        link, _, _, _ = read_state()
-        if link and is_alive(link):
-            status.success("♻️ အရင် link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
-            show_link(link)
-            return
+        links, ready, _, _ = read_state()
+        if links and ready:
+            ok = alive_links(links)
+            if ok:
+                status.success("♻️ အရင် link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
+                show_links(links, ok)
+                return
 
     # ၂။ Kaggle session run နေရင် push မလုပ်ဘဲ စောင့်
     pushed, t_push = False, 0
@@ -326,27 +483,27 @@ def run(force):
 
     # ၃။ စောင့် (၂ စက္ကန့်တစ်ခါ၊ ၁၀ မိနစ်အထိ)
     for _ in range(300):
-        link, ready, error, start_t = read_state()
+        links, ready, error, start_t = read_state()
         fresh = start_t > 0 and start_t >= fresh_after
 
         if fresh and error:
             status.error(f"❌ Kaggle မှာ error: {error}")
             return
 
-        if fresh and link and not ready:
-            status.info("⏳ Tunnel ရပါပြီ၊ App စတက်နေတယ်... "
-                        "အဆင်သင့်ဖြစ်မှ link ကို ပြပါမယ် (၁–၃ မိနစ်)")
+        if fresh and links and not ready:
+            status.info(f"⏳ Tunnel {len(links)} ခု ရပါပြီ၊ App စတက်နေတယ်... (၁–၃ မိနစ်)")
 
-        if fresh and ready and link:
-            if is_alive(link):
-                status.success("✅ App အဆင်သင့်ဖြစ်ပါပြီ!")
-                show_link(link)
+        if fresh and ready and links:
+            ok = alive_links(links)
+            if ok:
+                status.success(f"✅ App အဆင်သင့်ဖြစ်ပါပြီ! ({len(ok)}/{len(links)} link စစ်ပြီး)")
+                show_links(links, ok)
                 return
             ready_polls += 1
             status.info("⏳ App တက်ပြီ၊ Link ချိတ်ဆက်မှု စစ်နေတယ်...")
-            if ready_polls >= 20:   # ၄၀ စက္ကန့်လောက် စစ်လို့မရရင် link ကို ပြမယ်
-                status.warning("⚠️ Streamlit ကနေ စစ်လို့မရပေမဲ့ link ကို ကိုယ်တိုင် စမ်းကြည့်ပါ")
-                show_link(link)
+            if ready_polls >= 15:
+                status.warning("⚠️ Streamlit ကနေ စစ်လို့မရပေမဲ့ link တွေကို ကိုယ်တိုင် စမ်းကြည့်ပါ")
+                show_links(links)
                 return
         time.sleep(2)
 
