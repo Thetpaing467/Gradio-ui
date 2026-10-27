@@ -2,28 +2,37 @@ import os, json, time, tempfile
 import requests
 import streamlit as st
 
+# ==========================================
+# ⚙️ ဒီနေရာမှာ ခင်ဗျားရဲ့ အချက်အလက်တွေ ထည့်ပါ
+# ==========================================
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
 SLUG = "my-link-runner"
-GPU_ENABLED = False   # GPU လိုရင် True ပြောင်းပါ (တန်းစီရလို့ နှေးနိုင်)
-TOPIC = "kgl-k-7f3a9c2e51b84d06"
+GPU_ENABLED = False   # GPU လိုရင် True ပြောင်းပါ
+TOPIC = "kgl-k-7f3a9c2e51b84d06" # ntfy.sh topic (ဒါကို မပြောင်းပါနဲ့)
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 from kaggle.api.kaggle_api_extended import KaggleApi
 
 NAMES = {
+    "ngrok": "ngrok (⭐ VPN အခံနိုင်ဆုံး)",
+    "cloudflare": "Cloudflare (⭐ အမြန်ဆုံး)",
     "pinggy": "Pinggy",
     "lhr": "localhost.run",
     "serveo": "Serveo",
-    "cloudflare": "Cloudflare",
     "tmole": "Tunnelmole",
-    "ngrok": "ngrok",
 }
 
-st.set_page_config(page_title="Kaggle Link ထုတ်စက်", page_icon="🔗")
-st.title("🔗 Kaggle Public Link ထုတ်စက်")
+# VPN ခံနိုင်တဲ့ Link တွေကို ဦးစားပေးပြဖို့
+VPN_SAFE_ORDER = ["ngrok", "cloudflare", "pinggy", "tmole", "lhr", "serveo"]
 
+st.set_page_config(page_title="Kaggle Link ထုတ်စက်", page_icon="🔗")
+st.title("🔗 Kaggle Public Link ထုတ်စက် (Error ကင်း)")
+
+# ==========================================
+# Kaggle မှာ Run မယ့် Script
+# ==========================================
 KAGGLE_SCRIPT = r'''
 import os, re, sys, time, subprocess, threading, urllib.request
 from importlib import metadata
@@ -40,22 +49,18 @@ CF = "/kaggle/working/cloudflared"
 T0 = time.time()
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
-
 def say(msg):
     print(f"[{time.time() - T0:5.1f}s] {msg}", flush=True)
-
 
 def sh(cmd):
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     return p.returncode, (p.stdout + p.stderr)
-
 
 def tail_log(n=3000):
     try:
         return open(LOG, encoding="utf-8", errors="ignore").read()[-n:]
     except Exception:
         return "(log မရှိသေးပါ)"
-
 
 def post(kind, text):
     try:
@@ -64,13 +69,12 @@ def post(kind, text):
     except Exception as e:
         print("ntfy error:", e)
 
-
 post("start", "1")
 
 sh("pkill -f '[c]loudflared tunnel' ; pkill -f '[t]mole' ; pkill -f '[p]ython.*app.py'")
 time.sleep(1)
 
-# ---------------------------------------------------------- tunnels (အစမှာတင် စ)
+# ---------------------------------------------------------- tunnels
 def run_ssh(name, args, pattern):
     if sh("which ssh")[0] != 0:
         sh("apt-get update -qq && apt-get install -y -qq openssh-client")
@@ -90,11 +94,9 @@ def run_ssh(name, args, pattern):
             say(f"{name} ✅")
             post(name, m.group(0))
 
-
 def run_cloudflared():
     if not os.path.exists(CF):
-        sh(f"wget -q -O {CF} https://github.com/cloudflare/cloudflared/releases/latest/"
-           f"download/cloudflared-linux-amd64 && chmod +x {CF}")
+        sh(f"wget -q -O {CF} https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x {CF}")
     if not os.path.exists(CF):
         say("cloudflared ❌")
         return
@@ -109,13 +111,11 @@ def run_cloudflared():
             say("cloudflare ✅")
             post("cloudflare", m.group(0))
 
-
 def run_tmole():
     try:
         if sh("which tmole")[0] != 0:
             if sh("which npm")[0] != 0:
-                sh("apt-get update -qq && DEBIAN_FRONTEND=noninteractive "
-                   "apt-get install -y -qq nodejs npm")
+                sh("apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm")
             sh("npm install -g tunnelmole")
         if sh("which tmole")[0] != 0:
             say("tmole ❌ (install မရ)")
@@ -134,7 +134,6 @@ def run_tmole():
     except Exception as e:
         say(f"tmole ❌ {e}")
 
-
 def run_ngrok():
     if not NGROK_TOKEN:
         return
@@ -148,7 +147,6 @@ def run_ngrok():
     except Exception as e:
         say(f"ngrok ❌ {e}")
 
-
 TUNNELS = [
     ("pinggy", ["-p", "443", f"-R0:localhost:{PORT}", "a.pinggy.io"],
      r"https://[a-zA-Z0-9\-\.]+pinggy\.(?:link|io|online)"),
@@ -157,15 +155,19 @@ TUNNELS = [
     ("serveo", ["-R", f"80:localhost:{PORT}", "serveo.net"],
      r"https://[a-z0-9\-]+\.serveo(?:usercontent)?\.(?:net|com)"),
 ]
-for name, args, pattern in TUNNELS:
-    threading.Thread(target=run_ssh, args=(name, args, pattern), daemon=True).start()
+
+# ⭐ VPN-safe တွေကို အရင်စမယ်
+if NGROK_TOKEN:
+    threading.Thread(target=run_ngrok, daemon=True).start()
 threading.Thread(target=run_cloudflared, daemon=True).start()
 threading.Thread(target=run_tmole, daemon=True).start()
-threading.Thread(target=run_ngrok, daemon=True).start()
+
+# SSH tunnel တွေကို နောက်မှ စမယ်
+for name, args, pattern in TUNNELS:
+    threading.Thread(target=run_ssh, args=(name, args, pattern), daemon=True).start()
 
 # ---------------------------------------------------------- app ပြင်ဆင်ခြင်း
 RES = {}
-
 
 def task_git():
     if os.path.exists(REPO_DIR):
@@ -174,7 +176,6 @@ def task_git():
         rc, out = sh(f"git clone -q --depth 1 {REPO_URL} {REPO_DIR}")
     RES["git"] = (rc, out)
     say("git ✅" if rc == 0 else f"git ❌ {out[-300:]}")
-
 
 def task_pip():
     need = {
@@ -206,7 +207,6 @@ def task_pip():
     RES["pip"] = True
     say("pip ✅")
 
-
 def task_apt():
     need = ["ffmpeg", "libraqm0", "libfribidi0", "fonts-noto-core", "fonts-noto-cjk",
             "fonts-dejavu-core", "fonts-sil-padauk"]
@@ -222,7 +222,6 @@ def task_apt():
     RES["apt"] = True
     say("apt ✅ (ffmpeg / fonts ပြီး)")
 
-
 t_git = threading.Thread(target=task_git)
 t_pip = threading.Thread(target=task_pip)
 t_apt = threading.Thread(target=task_apt)
@@ -234,6 +233,7 @@ t_pip.join()
 if RES.get("git", (1,))[0] != 0:
     post("error", "git clone/update မအောင်မြင်ပါ: " + RES["git"][1][-300:])
     raise SystemExit("git မအောင်မြင်ပါ")
+
 os.chdir(REPO_DIR)
 print("Repo files:", sorted(os.listdir(".")))
 if not os.path.exists(APP_FILE):
@@ -284,8 +284,9 @@ while True:
         break
 '''
 
-
-# ------------------------------------------------------------ helpers
+# ==========================================
+# Helpers
+# ==========================================
 def read_state():
     links, ready, error, start_t = {}, False, None, 0
     try:
@@ -313,14 +314,34 @@ def read_state():
         pass
     return links, ready, error, start_t
 
-
 def is_alive(url):
+    """VPN-safe check — redirect လည်း လက်ခံ၊ content ပါ စစ်"""
     try:
-        r = requests.get(url, timeout=6, headers={"ngrok-skip-browser-warning": "1"})
-        return r.status_code == 200
+        r = requests.get(
+            url,
+            timeout=10,
+            allow_redirects=True,
+            headers={
+                "ngrok-skip-browser-warning": "1",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+            },
+        )
+        if r.status_code != 200:
+            return False
+        body = r.text.lower()[:2000]
+        bad_signs = ["blocked", "access denied", "vpn detected", "cloudflare ray id", "attention required"]
+        if any(s in body for s in bad_signs) and len(body) < 1500:
+            return False
+        return True
     except Exception:
         return False
 
+def sort_vpn_safe(links):
+    """VPN-safe link တွေကို ရှေ့ပို့"""
+    return dict(sorted(
+        links.items(),
+        key=lambda kv: VPN_SAFE_ORDER.index(kv[0]) if kv[0] in VPN_SAFE_ORDER else 99,
+    ))
 
 def kernel_busy(api):
     try:
@@ -330,21 +351,20 @@ def kernel_busy(api):
     except Exception:
         return False
 
-
 def links_md(links):
     return "\n\n".join(f"🔗 **{NAMES[k]}:** [{v}]({v})" for k, v in links.items())
 
-
 def show_final(links):
+    links = sort_vpn_safe(links)
+    st.markdown("### 🔗 ဖွင့်လို့ရတဲ့ Link တွေ (VPN-safe အစီအစဉ်)")
     st.markdown(links_md(links))
+    st.info("💡 **VPN ပိတ်ထားရင်** အကောင်းဆုံး။ မပိတ်နိုင်ရင် **ngrok → cloudflare → tmole** အစီအစဉ်နဲ့ စမ်းပါ။")
     for k, v in links.items():
-        st.caption(NAMES[k])
+        st.caption(f"{NAMES[k]}")
         st.code(v)
 
-
 def push_kernel(api, ngrok_token):
-    code = (KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
-                         .replace("__NGROK__", ngrok_token.strip()))
+    code = (KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC).replace("__NGROK__", ngrok_token.strip()))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
@@ -361,7 +381,6 @@ def push_kernel(api, ngrok_token):
     with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
         json.dump(meta, f)
     api.kernels_push(folder)
-
 
 def run(force, ngrok_token):
     status, box = st.empty(), st.empty()
@@ -406,7 +425,8 @@ def run(force, ngrok_token):
         if fresh and ready and links:
             alive = {k: v for k, v in links.items() if is_alive(v)}
             if alive:
-                status.success("✅ App အဆင်သင့်ဖြစ်ပါပြီ! VPN ပိတ်ပြီး တစ်ခုချင်း စမ်းကြည့်ပါ")
+                alive = sort_vpn_safe(alive)
+                status.success("✅ App အဆင်သင့်ဖြစ်ပါပြီ! VPN ပိတ်ပြီး ⭐ link တွေကို ဦးစွာ စမ်းပါ")
                 box.empty()
                 show_final(alive)
                 return
@@ -414,9 +434,12 @@ def run(force, ngrok_token):
 
     status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
 
+# ==========================================
+# UI
+# ==========================================
+st.info("💡 **အကြံပြုချက်:** ဖုန်းကနေ ဝင်မယ်ဆိုရင် Ngrok Token ထည့်ထားတာ အကောင်းဆုံးပါ။ (Error ကင်းပြီး VPN လည်း ခံနိုင်ပါတယ်)")
 
-# ------------------------------------------------------------ UI
-with st.expander("⚙️ ngrok (ရွေးချယ်)"):
+with st.expander("⚙️ ngrok (ရွေးချယ် - ထည့်ထားရင် ပိုကောင်း)"):
     ngrok_token = st.text_input("ngrok authtoken (မရှိရင် ကျော်ပါ)", type="password")
 
 if st.button("🚀 Link ယူမယ် (ရှိပြီးသား သုံးလို့ရရင် ပြန်သုံးမယ်)"):
