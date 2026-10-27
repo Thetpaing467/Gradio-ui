@@ -5,8 +5,11 @@ import streamlit as st
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
 SLUG = "my-link-runner"
-GPU_ENABLED = False   # GPU လိုရင် True ပြောင်းပါ (တန်းစီရလို့ နှေးနိုင်)
+GPU_ENABLED = False   # GPU လိုရင် True ပြောင်းပါ
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
+
+# ပုံသေ subdomain: အင်္ဂလိပ်စာလုံးသေး၊ ဂဏန်း၊ - သာ။ တခြားသူနဲ့ မတူအောင် ထူးခြားတာ ပေးပါ
+SUBDOMAIN = "thetuaiaa-recap-7f3a9c"
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
@@ -21,6 +24,7 @@ from importlib import metadata
 import requests
 
 NTFY_TOPIC = "__TOPIC__"
+SUB = "__SUB__"
 REPO_URL = "https://github.com/Thetpaing467/new.git"
 REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
@@ -64,27 +68,38 @@ time.sleep(1)
 def run_serveo():
     if sh("which ssh")[0] != 0:
         sh("apt-get update -qq && apt-get install -y -qq openssh-client")
+    fails = 0
     while True:   # ပြတ်သွားရင် ပြန်ချိတ်မယ်
+        use_fixed = fails < 3      # ၃ ကြိမ်မရရင် random နာမည်ကို ပြောင်းသုံး
+        target = f"{SUB}:80:localhost:{PORT}" if use_fixed else f"80:localhost:{PORT}"
+        say(f"serveo ချိတ်နေတယ် ({'ပုံသေ ' + SUB if use_fixed else 'random'})")
         p = subprocess.Popen(
             ["ssh",
              "-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null",
              "-o", "ServerAliveInterval=30",
              "-o", "ExitOnForwardFailure=yes",
-             "-R", f"80:localhost:{PORT}", "serveo.net"],
+             "-R", target, "serveo.net"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True)
-        sent = False
+        state = {"got": False}
+        # ၄၀ စက္ကန့်အတွင်း link မရရင် ssh ကို သတ်ပြီး ပြန်စ
+        timer = threading.Timer(40, lambda: None if state["got"] else p.kill())
+        timer.daemon = True
+        timer.start()
         for line in p.stdout:
             line = ANSI.sub("", line)
+            print(line, end="", flush=True)
             m = re.search(r"https://[a-z0-9\-]+\.serveo(?:usercontent)?\.(?:net|com)", line)
-            if m and not sent:
-                sent = True
+            if m and not state["got"]:
+                state["got"] = True
                 say("serveo ✅")
                 post("serveo", m.group(0))
+        timer.cancel()
         p.wait()
-        say("serveo ပြတ်သွားတယ် — ၃ စက္ကန့်နေရင် ပြန်ချိတ်မယ်")
-        time.sleep(3)
+        fails = 0 if state["got"] else fails + 1
+        say("serveo ပြတ်သွားတယ် — ပြန်ချိတ်မယ်")
+        time.sleep(3 if state["got"] else 5)
 
 
 threading.Thread(target=run_serveo, daemon=True).start()
@@ -213,7 +228,6 @@ while True:
 
 # ------------------------------------------------------------ helpers
 def read_state():
-    """ntfy ထဲက နောက်ဆုံး run ရဲ့ serveo link / အခြေအနေကို ဖတ်မယ်"""
     link, ready, error, start_t = None, False, None, 0
     try:
         r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
@@ -264,7 +278,7 @@ def show_link(link):
 
 
 def push_kernel(api):
-    code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
+    code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC).replace("__SUB__", SUBDOMAIN)
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
