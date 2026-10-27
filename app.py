@@ -133,6 +133,21 @@ def need_node():
         return sh("which npx")[0] == 0
 
 
+def wait_app_port():
+    """app port တက်မှ tunnelmole စမယ် (မဟုတ်ရင် 'nothing running on port' နဲ့ ထွက်သွားတယ်)"""
+    for _ in range(900):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=2)
+            return True
+        except Exception:
+            time.sleep(2)
+    return False
+
+
+def need_node_and_app():
+    return need_node() and wait_app_port()
+
+
 def download(url, dest):
     r = requests.get(url, timeout=120, stream=True, allow_redirects=True)
     r.raise_for_status()
@@ -191,15 +206,15 @@ def ngrok_thread():
 TUNNELS = [
     # (name, build_cmd, regex, fmt, wait, prep)
     ("pinggy",
-     lambda: ["ssh"] + SSH_OPTS + ["-p", "443", f"-R0:localhost:{PORT}", "a.pinggy.io"],
-     r"https://[a-zA-Z0-9\-\.]+\.pinggy\.(?:link|online|io)", None, 60, need_ssh),
+     lambda: ["ssh"] + SSH_OPTS + ["-p", "443", f"-R0:localhost:{PORT}", "free.pinggy.io"],
+     r"https://[a-z0-9\-]+\.(?:a\.)?free\.pinggy\.(?:link|online)", None, 60, need_ssh),
     ("localhost.run",
      lambda: ["ssh"] + SSH_OPTS + ["-R", f"80:localhost:{PORT}", "nokey@localhost.run"],
      r"https://[a-z0-9]+\.lhr\.life", None, 60, need_ssh),
     ("serveo",
      lambda: ["ssh"] + SSH_OPTS + ["-R", (f"{SUB}:80:localhost:{PORT}" if SUB else f"80:localhost:{PORT}"),
                                    "serveo.net"],
-     r"https://[a-z0-9\-]+\.serveo(?:usercontent)?\.(?:net|com)", None, 40, need_ssh),
+     r"https://(?!console\.)[a-z0-9\-]+\.serveousercontent\.com", None, 40, need_ssh),
     ("cloudflare",
      lambda: [CF_BIN, "tunnel", "--url", f"http://localhost:{PORT}",
               "--no-autoupdate", "--protocol", "http2"],
@@ -209,7 +224,7 @@ TUNNELS = [
      r"bore\.pub:(\d+)", lambda m: f"http://bore.pub:{m.group(1)}", 60, need_bore),
     ("tunnelmole",
      lambda: ["npx", "--yes", "tunnelmole", str(PORT)],
-     r"https://[a-z0-9\-]+\.tunnelmole\.(?:net|com)", None, 120, need_node),
+     r"https://[a-z0-9\-]+\.tunnelmole\.(?:net|com)", None, 120, need_node_and_app),
     ("localtunnel",
      lambda: ["npx", "--yes", "localtunnel", "--port", str(PORT)],
      r"https://[a-z0-9\-]+\.loca\.lt", None, 120, need_node),
