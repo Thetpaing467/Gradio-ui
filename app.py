@@ -17,6 +17,7 @@ NAMES = {
     "lhr": "localhost.run",
     "serveo": "Serveo",
     "cloudflare": "Cloudflare",
+    "tmole": "Tunnelmole",
     "ngrok": "ngrok",
 }
 
@@ -66,7 +67,7 @@ def post(kind, text):
 
 post("start", "1")
 
-sh("pkill -f '[c]loudflared tunnel' ; pkill -f '[p]ython.*app.py'")
+sh("pkill -f '[c]loudflared tunnel' ; pkill -f '[t]mole' ; pkill -f '[p]ython.*app.py'")
 time.sleep(1)
 
 # ---------------------------------------------------------- tunnels (အစမှာတင် စ)
@@ -109,6 +110,31 @@ def run_cloudflared():
             post("cloudflare", m.group(0))
 
 
+def run_tmole():
+    try:
+        if sh("which tmole")[0] != 0:
+            if sh("which npm")[0] != 0:
+                sh("apt-get update -qq && DEBIAN_FRONTEND=noninteractive "
+                   "apt-get install -y -qq nodejs npm")
+            sh("npm install -g tunnelmole")
+        if sh("which tmole")[0] != 0:
+            say("tmole ❌ (install မရ)")
+            return
+        p = subprocess.Popen(
+            ["tmole", str(PORT)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        sent = False
+        for line in p.stdout:
+            line = ANSI.sub("", line)
+            m = re.search(r"https://[a-z0-9\-]+\.tunnelmole\.(?:net|com)", line)
+            if m and not sent:
+                sent = True
+                say("tmole ✅")
+                post("tmole", m.group(0))
+    except Exception as e:
+        say(f"tmole ❌ {e}")
+
+
 def run_ngrok():
     if not NGROK_TOKEN:
         return
@@ -134,6 +160,7 @@ TUNNELS = [
 for name, args, pattern in TUNNELS:
     threading.Thread(target=run_ssh, args=(name, args, pattern), daemon=True).start()
 threading.Thread(target=run_cloudflared, daemon=True).start()
+threading.Thread(target=run_tmole, daemon=True).start()
 threading.Thread(target=run_ngrok, daemon=True).start()
 
 # ---------------------------------------------------------- app ပြင်ဆင်ခြင်း
