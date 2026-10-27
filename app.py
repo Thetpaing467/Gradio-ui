@@ -5,11 +5,9 @@ import streamlit as st
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
 SLUG = "my-link-runner"
-GPU_ENABLED = False   # GPU လိုရင် True ပြောင်းပါ
+GPU_ENABLED = False   # app crash ဖြစ်ရင် True ပြောင်းကြည့်ပါ
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
-
-# ပုံသေ subdomain: အင်္ဂလိပ်စာလုံးသေး၊ ဂဏန်း၊ - သာ။ တခြားသူနဲ့ မတူအောင် ထူးခြားတာ ပေးပါ
-SUBDOMAIN = "thetuaiaa-recap-7f3a9c"
+SUBDOMAIN = ""        # ပုံသေနာမည်မလိုရင် ဗလာထားပါ (random link ရမယ်)
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
@@ -70,7 +68,7 @@ def run_serveo():
         sh("apt-get update -qq && apt-get install -y -qq openssh-client")
     fails = 0
     while True:   # ပြတ်သွားရင် ပြန်ချိတ်မယ်
-        use_fixed = fails < 3      # ၃ ကြိမ်မရရင် random နာမည်ကို ပြောင်းသုံး
+        use_fixed = bool(SUB) and fails < 3
         target = f"{SUB}:80:localhost:{PORT}" if use_fixed else f"80:localhost:{PORT}"
         say(f"serveo ချိတ်နေတယ် ({'ပုံသေ ' + SUB if use_fixed else 'random'})")
         p = subprocess.Popen(
@@ -257,7 +255,7 @@ def read_state():
 
 def is_alive(url):
     try:
-        r = requests.get(url, timeout=6)
+        r = requests.get(url, timeout=8)
         return r.status_code == 200
     except Exception:
         return False
@@ -298,7 +296,7 @@ def push_kernel(api):
 
 
 def run(force):
-    status, box = st.empty(), st.empty()
+    status = st.empty()
     api = KaggleApi()
     api.authenticate()
 
@@ -313,7 +311,7 @@ def run(force):
     # ၂။ Kaggle session run နေရင် push မလုပ်ဘဲ စောင့်
     pushed, t_push = False, 0
     if not force and kernel_busy(api):
-        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — link စောင့်နေတယ်...")
+        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — စောင့်နေတယ်...")
     else:
         try:
             push_kernel(api)
@@ -324,23 +322,32 @@ def run(force):
         status.info("⏳ Kaggle စတင်နေတယ်...")
 
     fresh_after = (t_push - 10) if pushed else 0
+    ready_polls = 0
 
-    # ၃။ link စောင့် (၂ စက္ကန့်တစ်ခါ၊ ၁၀ မိနစ်အထိ)
+    # ၃။ စောင့် (၂ စက္ကန့်တစ်ခါ၊ ၁၀ မိနစ်အထိ)
     for _ in range(300):
         link, ready, error, start_t = read_state()
         fresh = start_t > 0 and start_t >= fresh_after
-        if fresh and link:
-            box.markdown(f"🔗 [{link}]({link})")
-            if not ready:
-                status.info("⏳ Link ရပါပြီ၊ App စတက်နေတယ်... ခဏနေမှ ဖွင့်ပါ")
+
         if fresh and error:
             status.error(f"❌ Kaggle မှာ error: {error}")
             return
-        if fresh and ready and link and is_alive(link):
-            status.success("✅ App အဆင်သင့်ဖြစ်ပါပြီ!")
-            box.empty()
-            show_link(link)
-            return
+
+        if fresh and link and not ready:
+            status.info("⏳ Tunnel ရပါပြီ၊ App စတက်နေတယ်... "
+                        "အဆင်သင့်ဖြစ်မှ link ကို ပြပါမယ် (၁–၃ မိနစ်)")
+
+        if fresh and ready and link:
+            if is_alive(link):
+                status.success("✅ App အဆင်သင့်ဖြစ်ပါပြီ!")
+                show_link(link)
+                return
+            ready_polls += 1
+            status.info("⏳ App တက်ပြီ၊ Link ချိတ်ဆက်မှု စစ်နေတယ်...")
+            if ready_polls >= 20:   # ၄၀ စက္ကန့်လောက် စစ်လို့မရရင် link ကို ပြမယ်
+                status.warning("⚠️ Streamlit ကနေ စစ်လို့မရပေမဲ့ link ကို ကိုယ်တိုင် စမ်းကြည့်ပါ")
+                show_link(link)
+                return
         time.sleep(2)
 
     status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
