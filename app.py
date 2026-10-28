@@ -321,24 +321,21 @@ def show_link(status, box, v):
     st.markdown(f"### 🔗 [{v}]({v})")
     st.code(v)
 
+FIXED_URL = f"https://{NGROK_DOMAIN}"
+
 def run(force):
     status, box = st.empty(), st.empty()
     api = KaggleApi()
     api.authenticate()
 
-    # အရင် link သုံးလို့ရသေးရင် ပြန်သုံး
-    if not force:
-        links, _, _, _ = read_state()
-        alive = {k: v for k, v in links.items() if is_alive(v)}
-        if alive:
-            status.success("♻️ အရင် Link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
-            for k, v in alive.items():
-                st.code(v)
-            return
+    # Link ပုံသေမို့ အသက်ရှိနေရင် ချက်ချင်းပြ
+    if not force and is_alive(FIXED_URL):
+        show_link(status, box, FIXED_URL)
+        return
 
     pushed, t_push = False, 0
     if not force and kernel_busy(api):
-        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — link စောင့်နေတယ်...")
+        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — စောင့်နေတယ်...")
     else:
         try:
             push_kernel(api)
@@ -346,20 +343,20 @@ def run(force):
             status.error(f"Push မအောင်မြင်ပါ: {e}")
             return
         pushed, t_push = True, time.time()
-        status.info("⏳ Kaggle စတင်နေတယ်... (ngrok ပုံသေ Domain ထုတ်နေတယ်)")
+        status.info("⏳ Kaggle စတင်နေတယ်... (၁ မိနစ်ဝန်းကျင် ကြာနိုင်တယ်)")
 
     fresh_after = (t_push - 10) if pushed else 0
 
-    for _ in range(600):
-        links, ready, error, start_t = read_state()
-        fresh = start_t > 0 and start_t >= fresh_after
+    for i in range(600):
+        # ntfy ကို ၅ စက္ကန့်တစ်ခါပဲ စစ် (error သိဖို့သာ)
+        if i % 5 == 0:
+            _, _, error, start_t = read_state()
+            if error and start_t > 0 and start_t >= fresh_after:
+                status.error(f"❌ Kaggle မှာ error: {error}")
+                return
 
-        if fresh and error:
-            status.error(f"❌ Kaggle မှာ error: {error}")
-            return
-
-        if fresh and links:
-            show_link(status, box, list(links.values())[0])
+        if is_alive(FIXED_URL):
+            show_link(status, box, FIXED_URL)
             return
 
         time.sleep(1)
