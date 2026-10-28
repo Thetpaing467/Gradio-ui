@@ -177,9 +177,18 @@ say("app စတင်နေတယ် (ngrok ပုံသေ domain)...")
 
 # App port ဖွင့်ပြီဆိုတာနဲ့ ngrok tunnel ဖွင့်ပြီး link ပို့မယ်
 from pyngrok import ngrok, conf
-conf.get_default().auth_token = NGROK_TOKEN
+ngrok.install_ngrok()
+NGROK_BIN = conf.get_default().ngrok_path
+NGROK_LOG = "/kaggle/working/ngrok.log"
+
+def ngrok_tail(n=600):
+    try:
+        return open(NGROK_LOG, encoding="utf-8", errors="ignore").read()[-n:]
+    except Exception:
+        return "(ngrok log မရှိ)"
 
 ready = False
+ngrok_proc = None
 for _ in range(1200):
     if app_proc.poll() is not None:
         print(f"❌ App crash (exit {app_proc.returncode})")
@@ -193,22 +202,40 @@ for _ in range(1200):
         time.sleep(0.3)
         continue
 
-    try:
-        ngrok.connect(PORT, domain=NGROK_DOMAIN)
+    # ngrok agent ကို တိုက်ရိုက် run (pyngrok API အဟောင်း မသုံးတော့ဘူး)
+    ngrok_proc = subprocess.Popen(
+        [NGROK_BIN, "http", str(PORT), f"--url=https://{NGROK_DOMAIN}",
+         f"--authtoken={NGROK_TOKEN}", "--log=stdout"],
+        stdout=open(NGROK_LOG, "w"), stderr=subprocess.STDOUT)
+
+    up = False
+    for _ in range(80):
+        time.sleep(0.5)
+        if ngrok_proc.poll() is not None:
+            break
+        try:
+            r = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2)
+            if r.json().get("tunnels"):
+                up = True
+                break
+        except Exception:
+            pass
+
+    if up:
         link = f"https://{NGROK_DOMAIN}"
         say(f"ngrok ✅ {link}")
         post("cloudflare", link)
         post("ready", "1")
         ready = True
-    except Exception as e:
-        post("error", f"ngrok error: {e}")
-        print("ngrok error:", e)
+    else:
+        err = ngrok_tail()
+        print("ngrok error:", err)
+        post("error", "ngrok error: " + err[-350:])
     break
 
 if not ready:
     print("⚠️ Link မထွက်ပါ — log:\n")
     print(tail_log())
-    post("error", "Link မထွက်ပါ: " + tail_log(400))
     raise SystemExit("Link မထွက်လို့ ရပ်လိုက်တယ်။")
 
 print(f"Running... log: {LOG}")
