@@ -161,6 +161,7 @@ def _patched_launch(self, *args, **kwargs):
     kwargs['share'] = False
     kwargs['server_name'] = '0.0.0.0'
     kwargs['server_port'] = 7860
+    kwargs['ssr_mode'] = False
     return _original_launch(self, *args, **kwargs)
 gradio.Blocks.launch = _patched_launch
 
