@@ -7,9 +7,18 @@ import streamlit as st
 # .streamlit/secrets.toml  သို့မဟုတ် Streamlit Cloud > Secrets
 #   KAGGLE_USERNAME = "thetuaiaa"
 #   KAGGLE_KEY = "NEW_KEY_HERE"
+#   NGROK_TOKEN = "..."
+#   NGROK_DOMAIN = "whisking-unvarying-citadel.ngrok-free.dev"
 # ==========================================
 KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
 KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", ""))
+
+# 🔗 ngrok ပုံသေ Domain  (ngrok dashboard > Domains ထဲက free domain ကို ဒီမှာထည့်ပါ)
+NGROK_TOKEN = st.secrets.get("NGROK_TOKEN", os.environ.get(
+    "NGROK_TOKEN", "3Jh9mozyHp150UpQiuvuPpZDZ36_7U2RiuikZjquzgVN9nVNp"))
+NGROK_DOMAIN = st.secrets.get("NGROK_DOMAIN", os.environ.get(
+    "NGROK_DOMAIN", "whisking-unvarying-citadel.ngrok-free.dev"))
+
 SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
@@ -19,17 +28,19 @@ os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 from kaggle.api.kaggle_api_extended import KaggleApi
 
 st.set_page_config(page_title="Kaggle Gradio Link", page_icon="🔗")
-st.title("🔗 Kaggle Gradio Share Link ထုတ်စက်")
+st.title("🔗 Kaggle Gradio Link ထုတ်စက် (ပုံသေ Domain)")
 
 # ==========================================
 # Kaggle မှာ Run မယ့် Script
 # ==========================================
 KAGGLE_SCRIPT = r'''
-import os, re, sys, time, subprocess, threading
+import os, re, sys, time, socket, subprocess, threading
 from importlib import metadata
 import requests
 
 NTFY_TOPIC = "__TOPIC__"
+NGROK_TOKEN = "__NGROK_TOKEN__"
+NGROK_DOMAIN = "__NGROK_DOMAIN__"
 REPO_URL = "https://github.com/Thetpaing467/new.git"
 REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
@@ -84,6 +95,7 @@ def task_pip():
         "pillow": "pillow",
         "requests": "requests",
         "numpy": "numpy",
+        "pyngrok": "pyngrok",
     }
     missing = []
     for dist, spec in need.items():
@@ -140,14 +152,15 @@ if fonts:
         "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-# Gradio launch ကို share=True ဖြစ်အောင် patch လုပ်တဲ့ wrapper
+# Gradio ကို share မသုံးဘဲ port ပုံသေနဲ့ run ခိုင်းတဲ့ wrapper (ngrok က ပုံသေ domain ပေးမယ်)
 WRAPPER = """
 import runpy, gradio, sys
 
 _original_launch = gradio.Blocks.launch
 def _patched_launch(self, *args, **kwargs):
-    kwargs['share'] = True
+    kwargs['share'] = False
     kwargs['server_name'] = '0.0.0.0'
+    kwargs['server_port'] = 7860
     return _original_launch(self, *args, **kwargs)
 gradio.Blocks.launch = _patched_launch
 
@@ -160,12 +173,13 @@ with open("_gradio_share_wrapper.py", "w") as f:
 env = dict(os.environ, PORT=str(PORT))
 app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
-say("app စတင်နေတယ် (Gradio Share)...")
+say("app စတင်နေတယ် (ngrok ပုံသေ domain)...")
 
-# Link ပေါ်တာနဲ့ ချက်ချင်းပို့မယ် (share link ပေါ်ပြီဆို app အဆင်သင့်ပဲ)
-GRADIO_LINK_PATTERN = re.compile(r"https://[a-zA-Z0-9\-]+\.gradio\.live")
+# App port ဖွင့်ပြီဆိုတာနဲ့ ngrok tunnel ဖွင့်ပြီး link ပို့မယ်
+from pyngrok import ngrok, conf
+conf.get_default().auth_token = NGROK_TOKEN
+
 ready = False
-
 for _ in range(1200):
     if app_proc.poll() is not None:
         print(f"❌ App crash (exit {app_proc.returncode})")
@@ -173,21 +187,28 @@ for _ in range(1200):
         post("error", "App crash: " + tail_log(400))
         break
 
-    m = GRADIO_LINK_PATTERN.search(tail_log(5000))
-    if m:
-        link = m.group(0)
-        say(f"gradio_share ✅ {link}")
+    try:
+        socket.create_connection(("127.0.0.1", PORT), timeout=1).close()
+    except OSError:
+        time.sleep(0.3)
+        continue
+
+    try:
+        ngrok.connect(PORT, domain=NGROK_DOMAIN)
+        link = f"https://{NGROK_DOMAIN}"
+        say(f"ngrok ✅ {link}")
         post("cloudflare", link)
         post("ready", "1")
         ready = True
-        break
-
-    time.sleep(0.3)
+    except Exception as e:
+        post("error", f"ngrok error: {e}")
+        print("ngrok error:", e)
+    break
 
 if not ready:
-    print("⚠️ Gradio link မထွက်ပါ — log:\n")
+    print("⚠️ Link မထွက်ပါ — log:\n")
     print(tail_log())
-    post("error", "Gradio link မထွက်ပါ: " + tail_log(400))
+    post("error", "Link မထွက်ပါ: " + tail_log(400))
     raise SystemExit("Link မထွက်လို့ ရပ်လိုက်တယ်။")
 
 print(f"Running... log: {LOG}")
@@ -231,7 +252,8 @@ def read_state():
 
 def is_alive(url):
     try:
-        r = requests.get(url, timeout=10, allow_redirects=True)
+        r = requests.get(url, timeout=10, allow_redirects=True,
+                         headers={"ngrok-skip-browser-warning": "1"})
         return r.status_code == 200
     except Exception:
         return False
@@ -245,7 +267,10 @@ def kernel_busy(api):
         return False
 
 def push_kernel(api):
-    code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
+    code = (KAGGLE_SCRIPT
+            .replace("__TOPIC__", TOPIC)
+            .replace("__NGROK_TOKEN__", NGROK_TOKEN)
+            .replace("__NGROK_DOMAIN__", NGROK_DOMAIN))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
@@ -264,7 +289,7 @@ def push_kernel(api):
     api.kernels_push(folder)
 
 def show_link(status, box, v):
-    status.success("✅ Gradio Link အဆင်သင့်ဖြစ်ပါပြီ!")
+    status.success("✅ Link အဆင်သင့်ဖြစ်ပါပြီ!")
     box.empty()
     st.markdown(f"### 🔗 [{v}]({v})")
     st.code(v)
@@ -279,7 +304,7 @@ def run(force):
         links, _, _, _ = read_state()
         alive = {k: v for k, v in links.items() if is_alive(v)}
         if alive:
-            status.success("♻️ အရင် Gradio Link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
+            status.success("♻️ အရင် Link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
             for k, v in alive.items():
                 st.code(v)
             return
@@ -294,7 +319,7 @@ def run(force):
             status.error(f"Push မအောင်မြင်ပါ: {e}")
             return
         pushed, t_push = True, time.time()
-        status.info("⏳ Kaggle စတင်နေတယ်... (Gradio Share ထုတ်နေတယ်)")
+        status.info("⏳ Kaggle စတင်နေတယ်... (ngrok ပုံသေ Domain ထုတ်နေတယ်)")
 
     fresh_after = (t_push - 10) if pushed else 0
 
@@ -317,9 +342,9 @@ def run(force):
 # ==========================================
 # Streamlit UI
 # ==========================================
-st.info("🚀 ဒီစနစ်က **Gradio ရဲ့ ကိုယ်ပိုင် Link** (`.gradio.live`) တစ်ခုတည်းကို အမြန်ထုတ်ပေးမှာပါ။")
+st.info(f"🚀 ဒီစနစ်က ngrok **ပုံသေ Domain** (`{NGROK_DOMAIN}`) နဲ့ Gradio app ကို ဖွင့်ပေးမှာပါ။")
 
-if st.button("🚀 Gradio Link ယူမယ်"):
+if st.button("🚀 Link ယူမယ်"):
     run(False)
 
 if st.button("🔄 အသစ်အတင်းထုတ်မယ်"):
