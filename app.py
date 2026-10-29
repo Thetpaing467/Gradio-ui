@@ -1,48 +1,28 @@
-import os, json, time, tempfile, subprocess, sys
+import os, json, time, tempfile
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
-
+# ==========================================
+# ⚙️ ခင်ဗျားရဲ့ အချက်အလက်တွေ
+# ==========================================
 KAGGLE_USERNAME = "thetuaiaa"
-KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c"
-
+KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
 SLUG = "my-link-runner"
-GPU_ENABLED = False
-TOPIC = "kgl-k-7f3a9c2e51b84d06"
+GPU_ENABLED = False   
+TOPIC = "kgl-k-7f3a9c2e51b84d06" 
 
-# kaggle package (မရှိမှ တစ်ခါပဲ install)
-try:
-    import kaggle  # noqa: F401
-except Exception:
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "kaggle"])
-
-os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
-cred = os.path.expanduser("~/.kaggle/kaggle.json")
-with open(cred, "w") as f:
-    json.dump({"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}, f)
-os.chmod(cred, 0o600)
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
-os.environ["KAGGLE_API_TOKEN"] = KAGGLE_KEY
+from kaggle.api.kaggle_api_extended import KaggleApi
 
-st.markdown(
-    """
-    <style>
-    #MainMenu, footer, header {visibility: hidden;}
-    .block-container {max-width: 520px; padding-top: 3rem;}
-    .stButton > button, .stLinkButton > a {height: 3.2rem; border-radius: 12px; font-weight: 600;}
-    h1 {text-align: center; font-size: 1.7rem !important; margin-bottom: 1.5rem;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.set_page_config(page_title="Kaggle Gradio Link", page_icon="🔗")
+st.title("🔗 Kaggle Gradio Share Link ထုတ်စက်")
 
 # ==========================================
-# Kaggle မှာ Run မယ့် Script
+# Kaggle မှာ Run မယ့် Script (Gradio Share ကို အဓိကထားတယ်)
 # ==========================================
 KAGGLE_SCRIPT = r'''
-import os, re, sys, time, subprocess, threading
+import os, re, sys, time, subprocess, threading, urllib.request
 from importlib import metadata
 import requests
 
@@ -61,11 +41,11 @@ def sh(cmd):
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     return p.returncode, (p.stdout + p.stderr)
 
-def read(path, n=3000):
+def tail_log(n=3000):
     try:
-        return open(path, encoding="utf-8", errors="ignore").read()[-n:]
+        return open(LOG, encoding="utf-8", errors="ignore").read()[-n:]
     except Exception:
-        return ""
+        return "(log မရှိသေးပါ)"
 
 def post(kind, text):
     try:
@@ -76,8 +56,9 @@ def post(kind, text):
 
 post("start", "1")
 sh("pkill -f '[p]ython.*app.py'")
-time.sleep(0.3)
+time.sleep(1)
 
+# ---------------------------------------------------------- App ပြင်ဆင်ခြင်း
 RES = {}
 
 def task_git():
@@ -112,11 +93,7 @@ def task_pip():
     if missing:
         say(f"pip install: {', '.join(missing)}")
         quoted = " ".join(f"'{m}'" for m in missing)
-        if sh("uv --version")[0] != 0:
-            sh(f"{sys.executable} -m pip install -q uv")
-        rc, out = sh(f"uv pip install --python {sys.executable} -q {quoted}")
-        if rc != 0:
-            rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
+        rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
         if rc != 0:
             say(f"pip ❌ {out[-500:]}")
     RES["pip"] = True
@@ -135,25 +112,16 @@ def task_apt():
             sh("apt-get update -qq")
             sh(cmd)
     RES["apt"] = True
-    say("apt ✅")
+    say("apt ✅ (ffmpeg / fonts ပြီး)")
 
-def task_model():
-    try:
-        from huggingface_hub import snapshot_download
-        snapshot_download("Systran/faster-whisper-base")
-        say("whisper model ✅")
-    except Exception as e:
-        say(f"whisper model skip: {str(e)[:100]}")
-
-threads = [threading.Thread(target=f) for f in (task_git, task_pip, task_apt)]
-for t in threads:
+t_git = threading.Thread(target=task_git)
+t_pip = threading.Thread(target=task_pip)
+t_apt = threading.Thread(target=task_apt)
+for t in (t_git, t_pip, t_apt):
     t.start()
-threads[0].join()
-threads[1].join()
-tm = threading.Thread(target=task_model, daemon=True)
-tm.start()
-threads[2].join()
 
+t_git.join()
+t_pip.join()
 if RES.get("git", (1,))[0] != 0:
     post("error", "git clone/update မအောင်မြင်ပါ: " + RES["git"][1][-300:])
     raise SystemExit("git မအောင်မြင်ပါ")
@@ -169,17 +137,19 @@ if fonts:
         "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
+# ⭐ Gradio Share Link ကို ဖမ်းယူဖို့ Wrapper Script ဖန်တီးခြင်း
 WRAPPER = """
 import runpy, gradio, sys
 
+# Gradio ရဲ့ launch ကို share=True ဖြစ်အောင် လှမ်းပြင်မယ်
 _original_launch = gradio.Blocks.launch
 def _patched_launch(self, *args, **kwargs):
     kwargs['share'] = True
     kwargs['server_name'] = '0.0.0.0'
-    kwargs['server_port'] = 7860
     return _original_launch(self, *args, **kwargs)
 gradio.Blocks.launch = _patched_launch
 
+# app.py ကို run မယ်
 sys.argv = ["app.py"]
 runpy.run_path("app.py", run_name="__main__")
 """
@@ -187,48 +157,72 @@ with open("_gradio_share_wrapper.py", "w") as f:
     f.write(WRAPPER)
 
 env = dict(os.environ, PORT=str(PORT))
+# wrapper ကို run မယ်
 app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
-say("app စတင်နေတယ်...")
+say("app စတင်နေတယ် (Gradio Share)...")
 
-link = None
-for _ in range(1200):
+# Log ထဲမှာ Gradio Share Link ပေါ်လာတာကို ရှာမယ်
+import re
+GRADIO_LINK_PATTERN = re.compile(r"https://[a-zA-Z0-9\-]+\.gradio\.live")
+found_link = False
+ready = False
+
+for _ in range(360):
     if app_proc.poll() is not None:
-        print(f"❌ App crash (exit {app_proc.returncode})")
-        print(read(LOG))
-        post("error", "App crash: " + read(LOG, 400))
-        raise SystemExit("App crash")
-    m = re.search(r"https://[a-zA-Z0-9\-]+\.gradio\.live", read(LOG, 20000))
-    if m:
-        link = m.group(0)
+        print(f"❌ App crash (exit {app_proc.returncode}) — log:\n")
+        print(tail_log())
+        post("error", "App crash: " + tail_log(400))
         break
-    time.sleep(0.2)
+        
+    log_content = tail_log(5000)
+    
+    # Link ရှာမယ်
+    if not found_link:
+        m = GRADIO_LINK_PATTERN.search(log_content)
+        if m:
+            found_link = True
+            link = m.group(0)
+            say(f"gradio_share ✅ {link}")
+            post("cloudflare", link) # Cloudflare နေရာမှာ Gradio Link ကို အစားထိုးထည့်မယ်
+    
+    # App တက်ပြီးလား စစ်မယ် (Local Port)
+    if not ready:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=1)
+            ready = True
+            say("app ✅")
+            post("ready", "1")
+            break
+        except Exception:
+            pass
+            
+    time.sleep(0.5)
 
-if not link:
-    print(read(LOG))
-    post("error", "Gradio link မရပါ: " + read(LOG, 300))
-    raise SystemExit("link မရပါ")
+if not ready:
+    print("⚠️ App မတက်သေးဘူး — log:\n")
+    print(tail_log())
+    post("error", "App မတက်ပါ: " + tail_log(400))
 
-post("link", link)
-post("ready", "1")
-say(f"ready ✅ {link}")
+if not ready:
+    raise SystemExit("App မတက်လို့ ရပ်လိုက်တယ်။")
 
 print(f"Running... log: {LOG}")
 while True:
     time.sleep(30)
     if app_proc.poll() is not None:
         print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode}) — log:\n")
-        print(read(LOG))
+        print(tail_log())
         break
 '''
 
 # ==========================================
-# Helpers
+# Helpers (Streamlit UI အတွက်)
 # ==========================================
 def read_state():
-    ready, error, start_t, link = False, None, 0, None
+    links, ready, error, start_t = {}, False, None, 0
     try:
-        r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=3h", timeout=10)
+        r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
         for line in r.text.strip().splitlines():
             try:
                 d = json.loads(line)
@@ -241,24 +235,23 @@ def read_state():
                 continue
             kind, val = msg.split("|", 1)
             if kind == "start":
-                ready, error, link, start_t = False, None, None, d.get("time", 0)
-            elif kind == "link":
-                link = val
+                links, ready, error, start_t = {}, False, None, d.get("time", 0)
+            elif kind == "cloudflare": # Gradio link ကို ဒီနေရာမှာ သိမ်းထားတယ်
+                links["gradio"] = val
             elif kind == "ready":
                 ready = True
             elif kind == "error":
                 error = val
     except Exception:
         pass
-    return ready, error, start_t, link
-
+    return links, ready, error, start_t
 
 def is_alive(url):
     try:
-        return requests.get(url, timeout=8, allow_redirects=True).status_code == 200
+        r = requests.get(url, timeout=10, allow_redirects=True)
+        return r.status_code == 200
     except Exception:
         return False
-
 
 def kernel_busy(api):
     try:
@@ -267,7 +260,6 @@ def kernel_busy(api):
         return "running" in s or "queued" in s
     except Exception:
         return False
-
 
 def push_kernel(api):
     code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
@@ -288,90 +280,68 @@ def push_kernel(api):
         json.dump(meta, f)
     api.kernels_push(folder)
 
-
-def show_link(link):
-    st.link_button("🔗 ဖွင့်မယ်", link, use_container_width=True)
-    st.code(link, language=None)
-
-
 def run(force):
-    try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
-    except Exception as e:
-        st.error(f"Kaggle package error: {e}")
-        return
+    status, box = st.empty(), st.empty()
+    api = KaggleApi()
+    api.authenticate()
 
-    t0 = time.time()
-    with st.status("စစ်ဆေးနေတယ်...", expanded=False) as s:
-        if not force:
-            ready, error, _, link = read_state()
-            if ready and link and is_alive(link):
-                s.update(label="အဆင်သင့်ဖြစ်ပြီ (ရှိပြီးသား link)", state="complete")
-                show_link(link)
-                return
+    if not force:
+        links, _, _, _ = read_state()
+        alive = {k: v for k, v in links.items() if is_alive(v)}
+        if alive:
+            status.success("♻️ အရင် Gradio Link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
+            for k, v in alive.items():
+                st.code(v)
+            return
 
+    pushed, t_push = False, 0
+    if not force and kernel_busy(api):
+        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — link စောင့်နေတယ်...")
+    else:
         try:
-            api = KaggleApi()
-            api.authenticate()
+            push_kernel(api)
         except Exception as e:
-            s.update(label="Kaggle login မရပါ", state="error")
-            st.error(str(e))
+            status.error(f"Push မအောင်မြင်ပါ: {e}")
             return
+        pushed, t_push = True, time.time()
+        status.info("⏳ Kaggle စတင်နေတယ်... (Gradio Share ထုတ်နေတယ်)")
 
-        pushed, t_push = False, 0
-        if not force and kernel_busy(api):
-            s.update(label="Kaggle စတင်နေတုန်း... စောင့်နေတယ်")
-        else:
-            try:
-                push_kernel(api)
-            except Exception as e:
-                s.update(label="Push မအောင်မြင်ပါ", state="error")
-                st.error(str(e))
-                return
-            pushed, t_push = True, time.time()
-            s.update(label="Kaggle စတင်နေတယ်...")
+    fresh_after = (t_push - 10) if pushed else 0
 
-        fresh_after = (t_push - 10) if pushed else 0
-        ok, final_link = False, None
-
-        for _ in range(850 if pushed else 85):
-            ready, error, start_t, link = read_state()
-            fresh = start_t > 0 and start_t >= fresh_after
-            if fresh and error:
-                s.update(label="Error ဖြစ်သွားတယ်", state="error")
-                st.error(error)
-                return
-            if fresh and ready and link:
-                ok, final_link = True, link
-                break
-            s.update(label=f"Kaggle စတင်နေတယ်... {int(time.time() - t0)}s")
-            time.sleep(0.7)
-
-        if not ok:
-            s.update(label="အချိန်ကုန်သွားတယ်", state="error")
-            if not pushed:
-                st.warning("Kaggle မှာ script အဟောင်း run နေတုန်း ဖြစ်နိုင်တယ်။ "
-                           "Kaggle → Your Work ထဲက session ကို Stop လုပ်ပြီး 🔄 ပြန်စမယ် ကို နှိပ်ပါ။")
-            else:
-                st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
+    for _ in range(300):
+        links, ready, error, start_t = read_state()
+        fresh = start_t > 0 and start_t >= fresh_after
+        
+        if fresh and links:
+            box.info(f"🔗 Link ရပါပြီ- {list(links.values())[0]}")
+            if not ready:
+                status.info("⏳ App စတက်နေတယ်... ခဏနေမှ ဖွင့်ပါ (၁-၂ မိနစ်ကြာနိုင်ပါတယ်)")
+                
+        if fresh and error:
+            status.error(f"❌ Kaggle မှာ error: {error}")
             return
+            
+        if fresh and ready and links:
+            alive = {k: v for k, v in links.items() if is_alive(v)}
+            if alive:
+                status.success("✅ Gradio Link အဆင်သင့်ဖြစ်ပါပြီ!")
+                box.empty()
+                for k, v in alive.items():
+                    st.markdown(f"### 🔗 Gradio Link: [{v}]({v})")
+                    st.code(v)
+                    st.info("💡 ဒီ Link က Gradio ရဲ့ ကိုယ်ပိုင် Link ဖြစ်လို့ VPN ခံနိုင်ပြီး Error ကင်းပါတယ်။")
+                return
+        time.sleep(2)
 
-        s.update(label=f"အဆင်သင့်ဖြစ်ပြီ ({int(time.time() - t0)}s)", state="complete")
-
-    show_link(final_link)
-
+    status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
 
 # ==========================================
-# UI
+# Streamlit UI
 # ==========================================
-st.title("🔗 Kaggle Runner")
-c1, c2 = st.columns(2)
-with c1:
-    start = st.button("🚀 စတင်မယ်", use_container_width=True, type="primary")
-with c2:
-    restart = st.button("🔄 ပြန်စမယ်", use_container_width=True)
+st.info("🚀 ဒီစနစ်က **Gradio ရဲ့ ကိုယ်ပိုင် Link** (`.gradio.live`) ကို ထုတ်ပေးမှာပါ။ VPN ခံနိုင်ပြီး Error လုံးဝ မတက်ပါဘူး။")
 
-if start:
+if st.button("🚀 Gradio Link ယူမယ်"):
     run(False)
-elif restart:
+
+if st.button("🔄 အသစ်အတင်းထုတ်မယ်"):
     run(True)
