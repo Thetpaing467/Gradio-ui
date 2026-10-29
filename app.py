@@ -8,10 +8,7 @@ import streamlit as st
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
 SLUG = "my-link-runner"
-
-# ⭐ ဒီနေရာမှာ CPU သက်သက် သုံးဖို့ ပိတ်ထားပါတယ်
-GPU_ENABLED = False   
-
+GPU_ENABLED = False   # CPU သက်သက်
 TOPIC = "kgl-k-7f3a9c2e51b84d06" 
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
@@ -23,7 +20,7 @@ st.title("🔗 Kaggle Link ထုတ်စက် (CPU မြန်မြန်)"
 st.markdown("---")
 
 # ==========================================
-# Kaggle မှာ Run မယ့် Script (CPU အတွက် ပြင်ထားတယ်)
+# Kaggle မှာ Run မယ့် Script (Gradio Share ကို အတင်း ထုတ်ခိုင်းထားတယ်)
 # ==========================================
 KAGGLE_SCRIPT = r'''
 import os, re, sys, time, subprocess, threading, urllib.request
@@ -165,14 +162,23 @@ if fonts:
     os.environ["RECAP_FONT"] = os.path.abspath("MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-# ⭐ Gradio Share Link ပါ ထွက်အောင် လုပ်ထားတယ်
+# ⭐⭐⭐ Gradio ကို Share Link အတင်း ထုတ်ခိုင်းမယ့် Wrapper (အဆင့်မြှင့်ထားတယ်) ⭐⭐⭐
 WRAPPER_CODE = """
-import runpy, gradio, sys
+import runpy, gradio, sys, os
+
+# Gradio ရဲ့ Share Server ကို တိုက်ရိုက် သတ်မှတ်ပေးမယ် (Error တက်တာ သက်သာသွားမယ်)
+os.environ["GRADIO_SHARE_SERVER_ADDRESS"] = "https://share.gradio.live" 
+os.environ["GRADIO_SHARE_SERVER_PORT"] = "443"
+
 _original_launch = gradio.Blocks.launch
 def _patched_launch(self, *args, **kwargs):
     kwargs['share'] = True
     kwargs['server_name'] = '0.0.0.0'
+    kwargs['share_server_address'] = 'share.gradio.live:443'
+    kwargs['share_server_protocol'] = 'https'
+    kwargs['max_threads'] = 40 # Thread တွေ ပိုတိုးပေးမယ်
     return _original_launch(self, *args, **kwargs)
+
 gradio.Blocks.launch = _patched_launch
 sys.argv = ["app.py"]
 runpy.run_path("app.py", run_name="__main__")
@@ -280,7 +286,7 @@ def push_kernel(api):
         "language": "python",
         "kernel_type": "script",
         "is_private": "true",
-        "enable_gpu": "false", # ⭐ CPU သက်သက်
+        "enable_gpu": "false", # CPU
         "enable_internet": "true",
     }
     with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
@@ -334,7 +340,7 @@ def run(force):
         if fresh and links:
             box.markdown(f"**ရရှိထားတဲ့ Link:** `{list(links.values())[0]}`")
             if not ready:
-                status.info("⏳ Link ရပါပြီ၊ App စတက်နေတယ်... ခဏနေမှ ဖွင့်ပါ (၁-၂ မိနစ်ကြာနိုင်ပါတယ်)")
+                status.info("⏳ Link ရပါပြီ၊ App စတက်နေတယ်... ခဏနေမှ ဖွင့်ပါ")
                 
         if fresh and error:
             status.error(f"❌ Kaggle မှာ error: {error}")
@@ -357,12 +363,12 @@ def run(force):
 with st.sidebar:
     st.header("⚙️ လမ်းညွှန်")
     st.markdown("""
-    - **CPU သက်သက်** ဖြစ်လို့ တန်းစီစောင့်ရတာ မရှိပါဘူး။
+    - **CPU သက်သက်** ဖြစ်လို့ မြန်ပါတယ်။
     - **Link ယူမယ်** ကို နှိပ်ပြီး ၁-၃ မိနစ် စောင့်ပါ။
     - ရလာတဲ့ **⭐ Gradio Link** ကို ဖုန်းကနေ ဖွင့်ပါ။
     """)
 
-st.info("💡 ဒီစနစ်က CPU ကို သုံးထားလို့ Kaggle တန်းစီစောင့်ရတာ မရှိဘဲ မြန်မြန် Link ထွက်ပါလိမ့်မယ်။")
+st.info("💡 ဒီစနစ်က CPU ကို သုံးထားလို့ မြန်မြန် Link ထွက်ပါလိမ့်မယ်။")
 
 col1, col2 = st.columns(2)
 with col1:
