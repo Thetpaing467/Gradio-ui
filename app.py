@@ -17,7 +17,7 @@ def _secret(name, default=""):
         return os.environ.get(name, default)
 
 KAGGLE_USERNAME = _secret("KAGGLE_USERNAME", "thetuaiaa")
-KAGGLE_KEY = _secret("KAGGLE_KEY")
+KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c"
 
 SLUG = "my-link-runner"
 GPU_ENABLED = False
@@ -127,7 +127,11 @@ def task_pip():
     if missing:
         say(f"pip install: {', '.join(missing)}")
         quoted = " ".join(f"'{m}'" for m in missing)
-        rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
+        if sh("uv --version")[0] != 0:
+            sh(f"{sys.executable} -m pip install -q uv")
+        rc, out = sh(f"uv pip install --system -q {quoted}")
+        if rc != 0:
+            rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
         if rc != 0:
             say(f"pip ❌ {out[-500:]}")
     RES["pip"] = True
@@ -202,7 +206,7 @@ for _ in range(1200):
     if m:
         link = m.group(0)
         break
-    time.sleep(0.5)
+    time.sleep(0.2)
 
 if not link:
     print(read(LOG))
@@ -339,7 +343,7 @@ def run(force):
         fresh_after = (t_push - 10) if pushed else 0
         ok, final_link = False, None
 
-        for _ in range(300):
+        for _ in range(600):
             ready, error, start_t, link = read_state()
             fresh = start_t > 0 and start_t >= fresh_after
 
@@ -351,18 +355,12 @@ def run(force):
             if fresh and ready and link:
                 ok, final_link = True, link
                 break
-            time.sleep(2)
+            time.sleep(1)
 
         if not ok:
             s.update(label="အချိန်ကုန်သွားတယ်", state="error")
             st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
             return
-
-        s.update(label="Link စစ်နေတယ်...")
-        for _ in range(10):
-            if is_alive(final_link):
-                break
-            time.sleep(3)
 
         s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
 
