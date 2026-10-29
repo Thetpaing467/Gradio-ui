@@ -14,7 +14,7 @@ SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
-# Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ
+# Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ (နောက်ကွယ်မှာ)
 os.system("pip install -U kaggle -q")
 
 # Token အသစ်အတွက် kaggle.json ဖန်တီးပါ
@@ -158,7 +158,7 @@ if fonts:
         "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-# ဒီနေရာမှာ Share=True ဖြစ်အောင် ပြင်ထားပါတယ်
+# ဒီနေရာမှာ Share=True ဖြစ်အောင် ပြင်ထားပါတယ် (မြန်မြန်ထွက်အောင် ချိန်ညှိထားပါတယ်)
 WRAPPER = """
 import runpy, gradio, sys
 
@@ -181,7 +181,7 @@ app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
 say("app စတင်နေတယ်...")
 
-# Gradio Share Link ကို Log ထဲကနေ ရှာမယ်
+# Gradio Share Link ကို Log ထဲကနေ ရှာမယ် (ပိုမြန်အောင် ချိန်ညှိထားပါတယ်)
 share_url = None
 for _ in range(600):
     if app_proc.poll() is not None:
