@@ -3,22 +3,15 @@ import requests
 import streamlit as st
 
 # ==========================================
-# ⚙️ Settings  (key ကို Streamlit secrets ထဲထည့်ပါ)
-# .streamlit/secrets.toml  သို့မဟုတ် Streamlit Cloud > Secrets
+# Settings  (Streamlit Secrets)
 #   KAGGLE_USERNAME = "thetuaiaa"
-#   KAGGLE_KEY = "NEW_KEY_HERE"
-#   NGROK_TOKEN = "..."
-#   NGROK_DOMAIN = "whisking-unvarying-citadel.ngrok-free.dev"
+#   KAGGLE_KEY      = "..."
+#   CF_TUNNEL_TOKEN = "eyJ..."
 # ==========================================
 KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
 KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", ""))
-
-# 🔗 ngrok ပုံသေ Domain  (ngrok dashboard > Domains ထဲက free domain ကို ဒီမှာထည့်ပါ)
-NGROK_TOKEN = st.secrets.get("NGROK_TOKEN", os.environ.get(
-    "NGROK_TOKEN", "3Jh9mozyHp150UpQiuvuPpZDZ36_7U2RiuikZjquzgVN9nVNp"))
-NGROK_DOMAIN = st.secrets.get("NGROK_DOMAIN", os.environ.get(
-    "NGROK_DOMAIN", "whisking-unvarying-citadel.ngrok-free.dev"))
-
+CF_TOKEN = st.secrets.get("CF_TUNNEL_TOKEN", os.environ.get("CF_TUNNEL_TOKEN", ""))
+DOMAIN_URL = "https://tpokemb.dpdns.org"
 SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
@@ -27,25 +20,40 @@ os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 from kaggle.api.kaggle_api_extended import KaggleApi
 
-st.set_page_config(page_title="Kaggle Gradio Link", page_icon="🔗")
-st.title("🔗 Kaggle Gradio Link ထုတ်စက် (ပုံသေ Domain)")
+st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
+
+st.markdown(
+    """
+    <style>
+    #MainMenu, footer, header {visibility: hidden;}
+    .block-container {max-width: 520px; padding-top: 3rem;}
+    .stButton > button, .stLinkButton > a {
+        height: 3.2rem; border-radius: 12px; font-weight: 600;
+    }
+    h1 {text-align: center; font-size: 1.7rem !important; margin-bottom: 1.5rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ==========================================
 # Kaggle မှာ Run မယ့် Script
 # ==========================================
 KAGGLE_SCRIPT = r'''
-import os, re, sys, time, socket, subprocess, threading
+import os, re, sys, time, subprocess, threading
 from importlib import metadata
 import requests
 
 NTFY_TOPIC = "__TOPIC__"
-NGROK_TOKEN = "__NGROK_TOKEN__"
-NGROK_DOMAIN = "__NGROK_DOMAIN__"
 REPO_URL = "https://github.com/Thetpaing467/new.git"
 REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
 PORT = 7860
 LOG = "/kaggle/working/app.log"
+CF_LOG = "/kaggle/working/cf.log"
+CF_BIN = "/kaggle/working/cloudflared"
+CF_TOKEN = "__CFTOKEN__"
+DOMAIN_URL = "__URL__"
 T0 = time.time()
 
 def say(msg):
@@ -55,11 +63,11 @@ def sh(cmd):
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     return p.returncode, (p.stdout + p.stderr)
 
-def tail_log(n=3000):
+def read(path, n=3000):
     try:
-        return open(LOG, encoding="utf-8", errors="ignore").read()[-n:]
+        return open(path, encoding="utf-8", errors="ignore").read()[-n:]
     except Exception:
-        return "(log မရှိသေးပါ)"
+        return ""
 
 def post(kind, text):
     try:
@@ -70,9 +78,9 @@ def post(kind, text):
 
 post("start", "1")
 sh("pkill -f '[p]ython.*app.py'")
+sh("pkill -f '[c]loudflared'")
 time.sleep(0.3)
 
-# ---------------------------------------------------------- App ပြင်ဆင်ခြင်း
 RES = {}
 
 def task_git():
@@ -95,7 +103,6 @@ def task_pip():
         "pillow": "pillow",
         "requests": "requests",
         "numpy": "numpy",
-        "pyngrok": "pyngrok",
     }
     missing = []
     for dist, spec in need.items():
@@ -127,19 +134,31 @@ def task_apt():
             sh("apt-get update -qq")
             sh(cmd)
     RES["apt"] = True
-    say("apt ✅ (ffmpeg / fonts ပြီး)")
+    say("apt ✅")
 
-t_git = threading.Thread(target=task_git)
-t_pip = threading.Thread(target=task_pip)
-t_apt = threading.Thread(target=task_apt)
-for t in (t_git, t_pip, t_apt):
+def task_cf():
+    if os.path.exists(CF_BIN):
+        RES["cf"] = True
+        return
+    rc, out = sh("curl -sL -o " + CF_BIN +
+                 " https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+                 " && chmod +x " + CF_BIN)
+    RES["cf"] = (rc == 0)
+    say("cloudflared ✅" if rc == 0 else f"cloudflared ❌ {out[-300:]}")
+
+threads = [threading.Thread(target=f) for f in (task_git, task_pip, task_apt, task_cf)]
+for t in threads:
     t.start()
+threads[0].join()
+threads[1].join()
+threads[3].join()
 
-t_git.join()
-t_pip.join()
 if RES.get("git", (1,))[0] != 0:
     post("error", "git clone/update မအောင်မြင်ပါ: " + RES["git"][1][-300:])
     raise SystemExit("git မအောင်မြင်ပါ")
+if not RES.get("cf"):
+    post("error", "cloudflared download မအောင်မြင်ပါ")
+    raise SystemExit("cloudflared မအောင်မြင်ပါ")
 
 os.chdir(REPO_DIR)
 if not os.path.exists(APP_FILE):
@@ -152,7 +171,6 @@ if fonts:
         "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-# Gradio ကို share မသုံးဘဲ port ပုံသေနဲ့ run ခိုင်းတဲ့ wrapper (ngrok က ပုံသေ domain ပေးမယ်)
 WRAPPER = """
 import runpy, gradio, sys
 
@@ -161,7 +179,6 @@ def _patched_launch(self, *args, **kwargs):
     kwargs['share'] = False
     kwargs['server_name'] = '0.0.0.0'
     kwargs['server_port'] = 7860
-    kwargs['ssr_mode'] = False
     return _original_launch(self, *args, **kwargs)
 gradio.Blocks.launch = _patched_launch
 
@@ -174,77 +191,62 @@ with open("_gradio_share_wrapper.py", "w") as f:
 env = dict(os.environ, PORT=str(PORT))
 app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
-say("app စတင်နေတယ် (ngrok ပုံသေ domain)...")
+say("app စတင်နေတယ်...")
 
-# App port ဖွင့်ပြီဆိုတာနဲ့ ngrok tunnel ဖွင့်ပြီး link ပို့မယ်
-from pyngrok import ngrok, conf
-ngrok.install_ngrok()
-NGROK_BIN = conf.get_default().ngrok_path
-NGROK_LOG = "/kaggle/working/ngrok.log"
+cf_proc = subprocess.Popen([CF_BIN, "tunnel", "--no-autoupdate", "run", "--token", CF_TOKEN],
+                           stdout=open(CF_LOG, "w"), stderr=subprocess.STDOUT)
+say("cloudflared စတင်နေတယ်...")
 
-def ngrok_tail(n=600):
-    try:
-        return open(NGROK_LOG, encoding="utf-8", errors="ignore").read()[-n:]
-    except Exception:
-        return "(ngrok log မရှိ)"
-
+app_ok = False
+cf_ok = False
 ready = False
-ngrok_proc = None
+
 for _ in range(1200):
     if app_proc.poll() is not None:
         print(f"❌ App crash (exit {app_proc.returncode})")
-        print(tail_log())
-        post("error", "App crash: " + tail_log(400))
+        print(read(LOG))
+        post("error", "App crash: " + read(LOG, 400))
+        break
+    if cf_proc.poll() is not None:
+        print("❌ cloudflared ရပ်သွားတယ်")
+        print(read(CF_LOG))
+        post("error", "Tunnel error: " + read(CF_LOG, 400))
         break
 
-    try:
-        socket.create_connection(("127.0.0.1", PORT), timeout=1).close()
-    except OSError:
-        time.sleep(0.3)
-        continue
-
-    # ngrok agent ကို တိုက်ရိုက် run (pyngrok API အဟောင်း မသုံးတော့ဘူး)
-    ngrok_proc = subprocess.Popen(
-        [NGROK_BIN, "http", str(PORT), f"--url=https://{NGROK_DOMAIN}",
-         f"--authtoken={NGROK_TOKEN}", "--log=stdout"],
-        stdout=open(NGROK_LOG, "w"), stderr=subprocess.STDOUT)
-
-    up = False
-    for _ in range(80):
-        time.sleep(0.5)
-        if ngrok_proc.poll() is not None:
-            break
+    if not app_ok:
         try:
-            r = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2)
-            if r.json().get("tunnels"):
-                up = True
-                break
+            app_ok = requests.get(f"http://127.0.0.1:{PORT}", timeout=2).status_code == 200
+            if app_ok:
+                say("app ✅")
         except Exception:
             pass
 
-    if up:
-        link = f"https://{NGROK_DOMAIN}"
-        say(f"ngrok ✅ {link}")
-        post("cloudflare", link)
+    if not cf_ok and "Registered tunnel connection" in read(CF_LOG, 20000):
+        cf_ok = True
+        say("tunnel ✅")
+
+    if app_ok and cf_ok:
+        post("cloudflare", DOMAIN_URL)
         post("ready", "1")
         ready = True
-    else:
-        err = ngrok_tail()
-        print("ngrok error:", err)
-        post("error", "ngrok error: " + err[-350:])
-    break
+        say(f"ready ✅ {DOMAIN_URL}")
+        break
+
+    time.sleep(0.5)
 
 if not ready:
-    print("⚠️ Link မထွက်ပါ — log:\n")
-    print(tail_log())
-    raise SystemExit("Link မထွက်လို့ ရပ်လိုက်တယ်။")
+    print("⚠️ မအောင်မြင်ပါ — log:\n")
+    print(read(LOG))
+    print(read(CF_LOG))
+    post("error", "Start မအောင်မြင်ပါ: " + read(LOG, 200) + read(CF_LOG, 200))
+    raise SystemExit("ရပ်လိုက်တယ်။")
 
 print(f"Running... log: {LOG}")
 while True:
     time.sleep(30)
     if app_proc.poll() is not None:
         print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode}) — log:\n")
-        print(tail_log())
+        print(read(LOG))
         break
 '''
 
@@ -252,7 +254,7 @@ while True:
 # Helpers
 # ==========================================
 def read_state():
-    links, ready, error, start_t = {}, False, None, 0
+    ready, error, start_t = False, None, 0
     try:
         r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
         for line in r.text.strip().splitlines():
@@ -267,24 +269,23 @@ def read_state():
                 continue
             kind, val = msg.split("|", 1)
             if kind == "start":
-                links, ready, error, start_t = {}, False, None, d.get("time", 0)
-            elif kind == "cloudflare":
-                links["gradio"] = val
+                ready, error, start_t = False, None, d.get("time", 0)
             elif kind == "ready":
                 ready = True
             elif kind == "error":
                 error = val
     except Exception:
         pass
-    return links, ready, error, start_t
+    return ready, error, start_t
+
 
 def is_alive(url):
     try:
-        r = requests.get(url, timeout=10, allow_redirects=True,
-                         headers={"ngrok-skip-browser-warning": "1"})
+        r = requests.get(url, timeout=10, allow_redirects=True)
         return r.status_code == 200
     except Exception:
         return False
+
 
 def kernel_busy(api):
     try:
@@ -294,11 +295,12 @@ def kernel_busy(api):
     except Exception:
         return False
 
+
 def push_kernel(api):
     code = (KAGGLE_SCRIPT
             .replace("__TOPIC__", TOPIC)
-            .replace("__NGROK_TOKEN__", NGROK_TOKEN)
-            .replace("__NGROK_DOMAIN__", NGROK_DOMAIN))
+            .replace("__CFTOKEN__", CF_TOKEN)
+            .replace("__URL__", DOMAIN_URL))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
@@ -316,61 +318,89 @@ def push_kernel(api):
         json.dump(meta, f)
     api.kernels_push(folder)
 
-def show_link(status, box, v):
-    status.success("✅ Link အဆင်သင့်ဖြစ်ပါပြီ!")
-    box.empty()
-    st.markdown(f"### 🔗 [{v}]({v})")
-    st.code(v)
 
-FIXED_URL = f"https://{NGROK_DOMAIN}"
+def show_link():
+    st.link_button("🔗 ဖွင့်မယ်", DOMAIN_URL, use_container_width=True)
+    st.code(DOMAIN_URL, language=None)
+
 
 def run(force):
-    status, box = st.empty(), st.empty()
-    api = KaggleApi()
-    api.authenticate()
-
-    # Link ပုံသေမို့ အသက်ရှိနေရင် ချက်ချင်းပြ
-    if not force and is_alive(FIXED_URL):
-        show_link(status, box, FIXED_URL)
+    if not KAGGLE_KEY or not CF_TOKEN:
+        st.error("Secrets ထဲမှာ KAGGLE_KEY နဲ့ CF_TUNNEL_TOKEN ထည့်ပါ။")
         return
 
-    pushed, t_push = False, 0
-    if not force and kernel_busy(api):
-        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — စောင့်နေတယ်...")
-    else:
-        try:
-            push_kernel(api)
-        except Exception as e:
-            status.error(f"Push မအောင်မြင်ပါ: {e}")
+    with st.status("စစ်ဆေးနေတယ်...", expanded=False) as s:
+        if not force and is_alive(DOMAIN_URL):
+            s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+            show_link()
             return
-        pushed, t_push = True, time.time()
-        status.info("⏳ Kaggle စတင်နေတယ်... (၁ မိနစ်ဝန်းကျင် ကြာနိုင်တယ်)")
 
-    fresh_after = (t_push - 10) if pushed else 0
+        try:
+            api = KaggleApi()
+            api.authenticate()
+        except Exception as e:
+            s.update(label="Kaggle login မရပါ", state="error")
+            st.error(str(e))
+            return
 
-    for i in range(600):
-        # ntfy ကို ၅ စက္ကန့်တစ်ခါပဲ စစ် (error သိဖို့သာ)
-        if i % 5 == 0:
-            _, _, error, start_t = read_state()
-            if error and start_t > 0 and start_t >= fresh_after:
-                status.error(f"❌ Kaggle မှာ error: {error}")
+        pushed, t_push = False, 0
+        if not force and kernel_busy(api):
+            s.update(label="Kaggle စတင်နေတုန်း... စောင့်နေတယ်")
+        else:
+            try:
+                push_kernel(api)
+            except Exception as e:
+                s.update(label="Push မအောင်မြင်ပါ", state="error")
+                st.error(str(e))
+                return
+            pushed, t_push = True, time.time()
+            s.update(label="Kaggle စတင်နေတယ်...")
+
+        fresh_after = (t_push - 10) if pushed else 0
+        ok = False
+
+        for _ in range(300):
+            ready, error, start_t = read_state()
+            fresh = start_t > 0 and start_t >= fresh_after
+
+            if fresh and error:
+                s.update(label="Error ဖြစ်သွားတယ်", state="error")
+                st.error(error)
                 return
 
-        if is_alive(FIXED_URL):
-            show_link(status, box, FIXED_URL)
+            if fresh and ready:
+                ok = True
+                break
+            time.sleep(2)
+
+        if not ok:
+            s.update(label="အချိန်ကုန်သွားတယ်", state="error")
+            st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
             return
 
-        time.sleep(1)
+        s.update(label="Domain စစ်နေတယ်...")
+        for _ in range(20):
+            if is_alive(DOMAIN_URL):
+                break
+            time.sleep(3)
 
-    status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
+        s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+
+    show_link()
+
 
 # ==========================================
-# Streamlit UI
+# UI
 # ==========================================
-st.info(f"🚀 ဒီစနစ်က ngrok **ပုံသေ Domain** (`{NGROK_DOMAIN}`) နဲ့ Gradio app ကို ဖွင့်ပေးမှာပါ။")
+st.title("🔗 Kaggle Runner")
 
-if st.button("🚀 Link ယူမယ်"):
+c1, c2 = st.columns(2)
+with c1:
+    start = st.button("🚀 စတင်မယ်", use_container_width=True, type="primary")
+with c2:
+    restart = st.button("🔄 ပြန်စမယ်", use_container_width=True)
+
+if start:
     run(False)
-
-if st.button("🔄 အသစ်အတင်းထုတ်မယ်"):
+elif restart:
     run(True)
