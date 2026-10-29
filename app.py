@@ -11,6 +11,7 @@ GPU_ENABLED = False   # app crash ဖြစ်ရင် True ပြောင်�
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 SUBDOMAIN = ""        # Serveo ပုံသေနာမည်မလိုရင် ဗလာထားပါ
 NGROK_TOKEN = ""      # ngrok account token ရှိရင်ထည့်ပါ (မရှိရင် ဗလာ)
+PINGGY_TOKEN = ""     # pinggy.io account token ရှိရင်ထည့်ပါ (မရှိရင် ဗလာ)
 # -----------------------------------------------
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
@@ -28,6 +29,7 @@ import requests
 NTFY_TOPIC = "__TOPIC__"
 SUB = "__SUB__"
 NGROK_TOKEN = "__NGROK__"
+PINGGY_TOKEN = "__PINGGY__"
 REPO_URL = "https://github.com/Thetpaing467/new.git"
 REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
@@ -230,6 +232,13 @@ TUNNELS = [
      r"https://[a-z0-9\-]+\.loca\.lt", None, 120, need_node),
 ]
 
+if PINGGY_TOKEN:
+    TUNNELS.append(
+        ("pinggy-token",
+         lambda: ["ssh"] + SSH_OPTS + ["-p", "443", f"-R0:localhost:{PORT}",
+                                       f"{PINGGY_TOKEN}@pro.pinggy.io"],
+         r"https://[a-z0-9\-\.]+\.pinggy\.(?:link|online)", None, 60, need_ssh))
+
 for name, cmd, rx, fmt, wait, prep in TUNNELS:
     threading.Thread(target=tunnel_loop, args=(name, cmd, rx, fmt, wait, prep),
                      daemon=True).start()
@@ -301,6 +310,48 @@ t_pip = threading.Thread(target=task_pip)
 t_apt = threading.Thread(target=task_apt)
 for t in (t_git, t_pip, t_apt):
     t.start()
+
+
+def gradio_share():
+    """Gradio ရဲ့ ကိုယ်ပိုင် share tunnel (xxxx.gradio.live) ကို app မပြင်ဘဲ ထုတ်မယ်"""
+    for _ in range(900):          # pip ပြီးတဲ့အထိ စောင့်
+        if RES.get("pip"):
+            break
+        time.sleep(1)
+    if not wait_app_port():
+        say("gradio share ကျော် — app port မတက်")
+        return
+    fails = 0
+    while fails < 6:
+        try:
+            import inspect, secrets
+            from gradio import networking
+            params = inspect.signature(networking.setup_tunnel).parameters
+            kw = dict(local_host="127.0.0.1", local_port=PORT,
+                      share_token=secrets.token_urlsafe(32),
+                      share_server_address=None,
+                      share_server_tls_certificate=None)
+            kw = {k: v for k, v in kw.items() if k in params}
+            url = networking.setup_tunnel(**kw)
+            say(f"gradio ✅ {url}")
+            post("tun", f"gradio={url}")
+            fails = 0
+            bad = 0
+            while bad < 3:        # link သေသွားရင် ပြန်ထုတ်
+                time.sleep(60)
+                try:
+                    r = requests.get(url, timeout=10)
+                    bad = 0 if r.status_code < 500 else bad + 1
+                except Exception:
+                    bad += 1
+            say("gradio link သေသွားတယ် — ပြန်ထုတ်မယ်")
+        except Exception as e:
+            fails += 1
+            say(f"gradio share error ({fails}): {str(e)[:200]}")
+            time.sleep(15)
+
+
+threading.Thread(target=gradio_share, daemon=True).start()
 
 t_git.join()
 t_pip.join()
@@ -446,7 +497,8 @@ def show_links(links, checked=None):
 def push_kernel(api):
     code = (KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
             .replace("__SUB__", SUBDOMAIN)
-            .replace("__NGROK__", NGROK_TOKEN))
+            .replace("__NGROK__", NGROK_TOKEN)
+            .replace("__PINGGY__", PINGGY_TOKEN))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
