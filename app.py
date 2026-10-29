@@ -3,12 +3,8 @@ import sys
 import json
 import time
 import tempfile
-import re
 import shutil
-import subprocess
-import requests
 import streamlit as st
-from importlib import metadata
 
 st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
 
@@ -17,8 +13,10 @@ st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centere
 # ==========================================
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c" 
+SLUG = "my-link-runner"
+GPU_ENABLED = False
 
-# Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ
+# Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ (နောက်ကွယ်မှာ)
 os.system("pip install -U kaggle -q")
 
 # Token အသစ်အတွက် kaggle.json ဖန်တီးပါ
@@ -31,10 +29,6 @@ os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 0o600)
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 os.environ["KAGGLE_API_TOKEN"] = KAGGLE_KEY
-
-SLUG = "my-link-runner"
-GPU_ENABLED = False
-LINK_TIMEOUT = 300 # ၅ မိနစ် စောင့်မယ်
 
 # ==========================================
 # UI
@@ -51,13 +45,13 @@ h1 {text-align:center;font-size:1.7rem!important;}
 """, unsafe_allow_html=True)
 
 st.title("🔗 Kaggle Runner")
-st.caption("Fast Gradio Share Launcher")
+st.caption("One-Click Gradio Share Launcher")
 
 # ==========================================
-# KAGGLE SCRIPT (ntfy ဖြုတ်ထားပါတယ်)
+# KAGGLE SCRIPT
 # ==========================================
 KAGGLE_SCRIPT = r'''
-import os, sys, time, re, json, shutil, subprocess
+import os, sys, time, re, shutil, subprocess
 from importlib import metadata
 
 REPO_URL = "https://github.com/Thetpaing467/new.git"
@@ -65,10 +59,6 @@ REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
 PORT = 7860
 LOG = "/kaggle/working/app.log"
-T0 = time.monotonic()
-
-def say(msg):
-    print(f"[{time.monotonic()-T0:6.1f}s] {msg}", flush=True)
 
 def sh(cmd, timeout=600):
     try:
@@ -77,12 +67,10 @@ def sh(cmd, timeout=600):
     except Exception as e:
         return 1, str(e)
 
-# Stop previous app
 sh("pkill -f '[p]ython.*_gradio_share_wrapper.py'")
 sh("pkill -f '[p]ython.*app.py'")
 time.sleep(0.2)
 
-# Git Clone
 if os.path.isdir(os.path.join(REPO_DIR, ".git")):
     rc, out = sh(f"git -C {REPO_DIR} fetch -q origin")
     if rc == 0:
@@ -96,7 +84,6 @@ if rc != 0:
     print("Git failed: " + out[-300:], flush=True)
     raise SystemExit(1)
 
-# Pip Install
 required = {
     "gradio": "gradio>=5,<6", "faster-whisper": "faster-whisper",
     "edge-tts": "edge-tts", "gradio_client": "gradio_client",
@@ -113,10 +100,9 @@ for dist, spec in required.items():
         missing.append(spec)
 
 if missing:
-    say("Installing missing packages: " + ", ".join(missing))
+    print("Installing missing packages: " + ", ".join(missing), flush=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q", *missing], capture_output=True, text=True)
 
-# App config
 os.chdir(REPO_DIR)
 fonts = [f for f in os.listdir(".") if f.lower().endswith((".ttf", ".otf", ".ttc"))]
 if fonts:
@@ -143,7 +129,7 @@ runpy.run_path("app.py", run_name="__main__")
 with open("_gradio_share_wrapper.py", "w", encoding="utf-8") as f:
     f.write(WRAPPER)
 
-say("Starting Gradio...")
+print("Starting Gradio...", flush=True)
 log_file = open(LOG, "w", encoding="utf-8")
 app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"], stdout=log_file, stderr=subprocess.STDOUT)
 
@@ -191,16 +177,8 @@ finally:
 '''
 
 # ==========================================
-# HELPERS
+# PUSH FUNCTION (စောင့်စရာမလိုဘဲ ချက်ချင်း ပြီးမယ်)
 # ==========================================
-def kernel_busy(api):
-    try:
-        result = api.kernels_status(f"{KAGGLE_USERNAME}/{SLUG}")
-        status = str(getattr(result, "status", result)).lower()
-        return "running" in status or "queued" in status
-    except Exception:
-        return False
-
 def push_kernel(api):
     folder = tempfile.mkdtemp(prefix="kaggle_runner_")
     try:
@@ -217,81 +195,30 @@ def push_kernel(api):
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
-def show_link(url):
-    st.success("Gradio Link အဆင်သင့်ဖြစ်ပြီ")
-    st.link_button("🔗 ဖွင့်မယ်", url, use_container_width=True)
-    st.code(url, language=None)
-
 # ==========================================
-# MAIN RUN FUNCTION
+# RUN
 # ==========================================
-def run(force=False):
+def run():
     try:
         from kaggle.api.kaggle_api_extended import KaggleApi
-    except Exception as e:
-        st.error(f"Kaggle package error: {e}")
-        return
-
-    progress = st.progress(0)
-    status = st.empty()
-
-    try:
-        status.info("Kaggle login စစ်ဆေးနေတယ်...")
         api = KaggleApi()
         api.authenticate()
-        progress.progress(5)
-
-        status.info("Kaggle kernel push လုပ်နေတယ်... (ခဏစောင့်ပါ)")
-        progress.progress(10)
-        push_kernel(api)
-
-        status.info("Link ထွက်လာတာကို စောင့်နေတယ်... (၃-၅ မိနစ်ကြာနိုင်ပါတယ်)")
-        deadline = time.monotonic() + LINK_TIMEOUT
-        found_link = None
-
-        # Kaggle Output ထဲက Link ကို တိုက်ရိုက်ရှာမယ်
-        while time.monotonic() < deadline:
-            try:
-                # kernel output ကို ဖတ်မယ်
-                files = api.kernels_output(f"{KAGGLE_USERNAME}/{SLUG}")
-                if files:
-                    for f in files:
-                        if "script.log" in f or "output.log" in f or ".log" in f:
-                            with open(f, "r", encoding="utf-8", errors="ignore") as log_f:
-                                content = log_f.read()
-                                match = re.search(r"https://[a-zA-Z0-9-]+\.gradio\.live", content)
-                                if match:
-                                    found_link = match.group(0)
-                                    break
-                if found_link:
-                    break
-            except Exception as e:
-                pass # Kernel မပြီးသေးရင် Error တက်တတ်လို့ ignore လုပ်မယ်
-
-            time.sleep(5)
-
-        if found_link:
-            progress.progress(100)
-            status.success("အဆင်သင့်ဖြစ်ပြီ")
-            show_link(found_link)
-        else:
-            status.error("Link စောင့်ဆိုင်းချိန်ကုန်သွားပြီ")
-            st.warning("Kaggle → Code → my-link-runner → Logs ကိုစစ်ပါ။ Link ထွက်ဖို့ အချိန်ပိုကြာနိုင်ပါတယ်။ ခဏနေပြီး Logs မှာ ပြန်စစ်ကြည့်ပါ။")
-
+        
+        with st.spinner("Kaggle ကို လွှတ်လိုက်ပါပြီ..."):
+            push_kernel(api)
+            
+        st.success("✅ အောင်မြင်ပါပြီ။ အောက်က ခလုတ်ကိုနှိပ်ပြီး Link ကို ယူပါ။")
+        
     except Exception as e:
-        status.error("Run မအောင်မြင်ပါ")
-        st.exception(e)
+        st.error(f"Error: {e}")
 
 # ==========================================
 # BUTTONS
 # ==========================================
-c1, c2 = st.columns(2)
-with c1:
-    start = st.button("🚀 စတင်မယ်", type="primary", use_container_width=True)
-with c2:
-    restart = st.button("🔄 ပြန်စမယ်", use_container_width=True)
+if st.button("🚀 စတင်မယ်", type="primary", use_container_width=True):
+    run()
 
-if start:
-    run(force=False)
-elif restart:
-    run(force=True)
+st.divider()
+st.markdown("### Link ယူရန် (၁ မိနစ်ခန့် စောင့်ပြီးမှ နှိပ်ပါ)")
+st.markdown(f"[👉 ဒီနေရာကို နှိပ်ပြီး Kaggle Log ကြည့်မယ်](https://www.kaggle.com/code/{KAGGLE_USERNAME}/{SLUG}/log)")
+st.caption("အပေါ်က Link ကို နှိပ်ပြီး Log ထဲမှာ `gradio.live` ပါတဲ့ Link ကို Copy ကူးပြီး ဖွင့်လိုက်ပါ။")
