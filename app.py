@@ -1,40 +1,27 @@
-import os, json, time, tempfile
+import os, json, time, tempfile, subprocess, sys
 import requests
 import streamlit as st
 
 st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
 
-# ==========================================
-# Settings
-# ==========================================
-# Secrets ကို .streamlit/secrets.toml (ဒါမှမဟုတ် Streamlit Cloud Secrets) ထဲမှာ ထည့်ပါ
-#   KAGGLE_USERNAME = "thetuaiaa"
-#   KAGGLE_KEY = "your-new-key"
-def _secret(name, default=""):
-    try:
-        return st.secrets[name]
-    except Exception:
-        return os.environ.get(name, default)
-
-KAGGLE_USERNAME = _secret("KAGGLE_USERNAME", "thetuaiaa")
+KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c"
 
 SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
-# ==========================================
-# Kaggle Setup
-# ==========================================
-os.system("pip install -U kaggle -q")
+# kaggle package (မရှိမှ တစ်ခါပဲ install)
+try:
+    import kaggle  # noqa: F401
+except Exception:
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "kaggle"])
 
-if KAGGLE_KEY:
-    os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
-    cred_path = os.path.expanduser("~/.kaggle/kaggle.json")
-    with open(cred_path, "w") as f:
-        json.dump({"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}, f)
-    os.chmod(cred_path, 0o600)
-
+os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
+cred = os.path.expanduser("~/.kaggle/kaggle.json")
+with open(cred, "w") as f:
+    json.dump({"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}, f)
+os.chmod(cred, 0o600)
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 os.environ["KAGGLE_API_TOKEN"] = KAGGLE_KEY
@@ -44,9 +31,7 @@ st.markdown(
     <style>
     #MainMenu, footer, header {visibility: hidden;}
     .block-container {max-width: 520px; padding-top: 3rem;}
-    .stButton > button, .stLinkButton > a {
-        height: 3.2rem; border-radius: 12px; font-weight: 600;
-    }
+    .stButton > button, .stLinkButton > a {height: 3.2rem; border-radius: 12px; font-weight: 600;}
     h1 {text-align: center; font-size: 1.7rem !important; margin-bottom: 1.5rem;}
     </style>
     """,
@@ -152,11 +137,22 @@ def task_apt():
     RES["apt"] = True
     say("apt ✅")
 
+def task_model():
+    try:
+        from huggingface_hub import snapshot_download
+        snapshot_download("Systran/faster-whisper-base")
+        say("whisper model ✅")
+    except Exception as e:
+        say(f"whisper model skip: {str(e)[:100]}")
+
 threads = [threading.Thread(target=f) for f in (task_git, task_pip, task_apt)]
 for t in threads:
     t.start()
 threads[0].join()
 threads[1].join()
+tm = threading.Thread(target=task_model, daemon=True)
+tm.start()
+threads[2].join()
 
 if RES.get("git", (1,))[0] != 0:
     post("error", "git clone/update မအောင်မြင်ပါ: " + RES["git"][1][-300:])
@@ -232,7 +228,7 @@ while True:
 def read_state():
     ready, error, start_t, link = False, None, 0, None
     try:
-        r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
+        r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=3h", timeout=10)
         for line in r.text.strip().splitlines():
             try:
                 d = json.loads(line)
@@ -259,8 +255,7 @@ def read_state():
 
 def is_alive(url):
     try:
-        r = requests.get(url, timeout=10, allow_redirects=True)
-        return r.status_code == 200
+        return requests.get(url, timeout=8, allow_redirects=True).status_code == 200
     except Exception:
         return False
 
@@ -300,22 +295,18 @@ def show_link(link):
 
 
 def run(force):
-    if not KAGGLE_KEY:
-        st.error("Secrets ထဲမှာ ထည့်ပါ: KAGGLE_KEY")
-        return
-
     try:
         from kaggle.api.kaggle_api_extended import KaggleApi
     except Exception as e:
         st.error(f"Kaggle package error: {e}")
         return
 
+    t0 = time.time()
     with st.status("စစ်ဆေးနေတယ်...", expanded=False) as s:
-        # run ပြီးသား link ရှိရင် ပြန်သုံး
         if not force:
             ready, error, _, link = read_state()
             if ready and link and is_alive(link):
-                s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+                s.update(label="အဆင်သင့်ဖြစ်ပြီ (ရှိပြီးသား link)", state="complete")
                 show_link(link)
                 return
 
@@ -343,32 +334,29 @@ def run(force):
         fresh_after = (t_push - 10) if pushed else 0
         ok, final_link = False, None
 
-        for _ in range(600 if pushed else 60):
+        for _ in range(850 if pushed else 85):
             ready, error, start_t, link = read_state()
             fresh = start_t > 0 and start_t >= fresh_after
-
             if fresh and error:
                 s.update(label="Error ဖြစ်သွားတယ်", state="error")
                 st.error(error)
                 return
-
             if fresh and ready and link:
                 ok, final_link = True, link
                 break
-            time.sleep(1)
+            s.update(label=f"Kaggle စတင်နေတယ်... {int(time.time() - t0)}s")
+            time.sleep(0.7)
 
         if not ok:
             s.update(label="အချိန်ကုန်သွားတယ်", state="error")
             if not pushed:
-                st.warning(
-                    "Kaggle မှာ script အဟောင်း run နေတုန်း ဖြစ်နိုင်တယ်။ "
-                    "Kaggle → Your Work ထဲက session ကို Stop လုပ်ပြီး 🔄 ပြန်စမယ် ကို နှိပ်ပါ။"
-                )
+                st.warning("Kaggle မှာ script အဟောင်း run နေတုန်း ဖြစ်နိုင်တယ်။ "
+                           "Kaggle → Your Work ထဲက session ကို Stop လုပ်ပြီး 🔄 ပြန်စမယ် ကို နှိပ်ပါ။")
             else:
                 st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
             return
 
-        s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+        s.update(label=f"အဆင်သင့်ဖြစ်ပြီ ({int(time.time() - t0)}s)", state="complete")
 
     show_link(final_link)
 
@@ -377,7 +365,6 @@ def run(force):
 # UI
 # ==========================================
 st.title("🔗 Kaggle Runner")
-
 c1, c2 = st.columns(2)
 with c1:
     start = st.button("🚀 စတင်မယ်", use_container_width=True, type="primary")
