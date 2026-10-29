@@ -5,8 +5,8 @@ import streamlit as st
 # ==========================================
 # Settings  (Streamlit Secrets)
 #   KAGGLE_USERNAME = "thetuaiaa"
-#   KAGGLE_KEY      = "..."
-#   CF_TUNNEL_TOKEN = "eyJ..."
+#   KAGGLE_KEY      = "kgl-k-7f3a9c2e51b84d06"
+#   CF_TUNNEL_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
 # ==========================================
 KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
 KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", ""))
