@@ -99,8 +99,11 @@ def tunnel_loop(name, build_cmd, rx, fmt=None, wait=60, prep=None):
                 if m:
                     url = fmt(m) if fmt else m.group(0)
                     state["got"] = True
-                    say(f"{name} ✅ {url}")
-                    post("tun", f"{name}={url}")
+                    nm = name
+                    if name.startswith("pinggy"):   # pinggy က domain ၂ မျိုးပေးတယ် — နှစ်ခုလုံးပြမယ်
+                        nm = f"{name} ({'.'.join(url.split('/')[2].split('.')[-2:])})"
+                    say(f"{nm} ✅ {url}")
+                    post("tun", f"{nm}={url}")
                 elif not state["got"]:
                     print(f"[{name}] {line.rstrip()[:200]}", flush=True)
             timer.cancel()
@@ -208,7 +211,8 @@ TUNNELS = [
     # (name, build_cmd, regex, fmt, wait, prep)
     ("pinggy",
      lambda: ["ssh"] + SSH_OPTS + ["-p", "443", f"-R0:localhost:{PORT}", "free.pinggy.io"],
-     r"https://[a-z0-9\-]+\.(?:a\.)?free\.pinggy\.(?:link|online)", None, 60, need_ssh),
+     r"https://[a-z0-9\-\.]+\.(?:pinggy-free\.link|pinggy\.net|pinggy\.link|pinggy\.online)",
+     None, 60, need_ssh),
     ("localhost.run",
      lambda: ["ssh"] + SSH_OPTS + ["-R", f"80:localhost:{PORT}", "nokey@localhost.run"],
      r"https://[a-z0-9]+\.lhr\.life", None, 60, need_ssh),
@@ -396,6 +400,30 @@ def wait_up(proc, secs=180):
 
 app_proc = start_app()
 say("app စတင်နေတယ်...")
+
+
+def monitor():
+    """app စတင်ချိန် ၃ မိနစ် app log နဲ့ memory ကို Kaggle log ထဲ ပြမယ် (ဘာကြောင့်ရပ်လဲ ကြည့်ဖို့)"""
+    pos = 0
+    for i in range(60):
+        time.sleep(3)
+        try:
+            with open(LOG, encoding="utf-8", errors="ignore") as f:
+                f.seek(pos)
+                new = f.read()
+                pos = f.tell()
+            for l in new.splitlines():
+                print("[app]", l[:300], flush=True)
+        except Exception:
+            pass
+        if i % 2 == 0:
+            try:
+                say("mem " + sh("free -m")[1].splitlines()[1])
+            except Exception:
+                pass
+
+
+threading.Thread(target=monitor, daemon=True).start()
 if wait_up(app_proc, 180):
     say("app ✅")
     post("ready", "1")
