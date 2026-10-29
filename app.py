@@ -3,18 +3,19 @@ import requests
 import streamlit as st
 
 # ==========================================
-# ⚙️ Settings
-# ⚠️ ဒီ key ကို public repo မှာ မတင်ပါနဲ့!
-# ⚠️ ဒီ key ကို ချက်ချင်း revoke လုပ်ပါ: https://www.kaggle.com/settings
+# ⚙️ Settings (Key & Username ထည့်ပြီးသား)
 # ==========================================
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "KGAT_28b2b967d309484510ffc764b8130e69"
+
 SLUG = "my-link-runner"
-GPU_ENABLED = False
+GPU_ENABLED = False  # CPU နဲ့ Run ရန်
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
+# Kaggle API အသစ် (KGAT) အတွက် လိုအပ်သော Environment Variables များ
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
+os.environ["KAGGLE_API_TOKEN"] = KAGGLE_KEY  # 401 Error မတက်စေရန် အဓိက ထည့်ရမည့်အချက်
 
 from kaggle.api.kaggle_api_extended import KaggleApi
 
@@ -277,7 +278,7 @@ def push_kernel(api):
         "language": "python",
         "kernel_type": "script",
         "is_private": "true",
-        "enable_gpu": "true" if GPU_ENABLED else "false",
+        "enable_gpu": "true" if GPU_ENABLED else "false", # CPU ဖြစ်လို့ false ဖြစ်သွားပါမည်
         "enable_internet": "true",
     }
     with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
@@ -337,7 +338,7 @@ def run(force):
 # ==========================================
 # Streamlit UI
 # ==========================================
-st.warning("⚠️ ဒီ app မှာ Kaggle API Key ကို hardcode ထည့်ထားပါတယ်။ Public မှာ မတင်ပါနဲ့။")
+st.warning("⚠️ ဒီ app မှာ Kaggle API Token ကို hardcode ထည့်ထားပါတယ်။ Public မှာ မတင်ပါနဲ့။")
 st.info("🚀 ဒီစနစ်က **Gradio ရဲ့ ကိုယ်ပိုင် Link** (`.gradio.live`) တစ်ခုတည်းကို အမြန်ထုတ်ပေးမှာပါ။")
 
 if st.button("🚀 Gradio Link ယူမယ်"):
