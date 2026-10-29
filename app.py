@@ -2,28 +2,15 @@ import os, json, time, tempfile
 import requests
 import streamlit as st
 
+st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
+
 # ==========================================
 # Settings
 # ==========================================
-# Secrets မှာ မထည့်ထားရင် ဒီကွက်လပ်တွေကို အသုံးပြုသွားပါမယ်
-DEFAULT_KAGGLE_USERNAME = "thetuaiaa"
-DEFAULT_KAGGLE_KEY = "kgl-k-7f3a9c2e51b84d06"
-DEFAULT_CF_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
 
-try:
-    KAGGLE_USERNAME = st.secrets["KAGGLE_USERNAME"]
-except Exception:
-    KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", DEFAULT_KAGGLE_USERNAME)
-
-try:
-    KAGGLE_KEY = st.secrets["KAGGLE_KEY"]
-except Exception:
-    KAGGLE_KEY = os.environ.get("KAGGLE_KEY", DEFAULT_KAGGLE_KEY)
-
-try:
-    CF_TOKEN = st.secrets["CF_TUNNEL_TOKEN"]
-except Exception:
-    CF_TOKEN = os.environ.get("CF_TUNNEL_TOKEN", DEFAULT_CF_TOKEN)
+KAGGLE_USERNAME = "thetuaiaa"
+KAGGLE_KEY = "kgl-k-7f3a9c2e51b84d06"
+CF_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
 
 DOMAIN_URL = "https://tpokemb.dpdns.org"
 SLUG = "my-link-runner"
@@ -32,14 +19,6 @@ TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
-
-try:
-    from kaggle.api.kaggle_api_extended import KaggleApi
-except ImportError:
-    st.error("Kaggle package မရှိပါ။ `pip install kaggle` လုပ်ပါ။")
-    st.stop()
-
-st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
 
 st.markdown(
     """
@@ -156,7 +135,7 @@ def task_apt():
     say("apt ✅")
 
 def task_cf():
-    if os.path.exists(CF_BIN):
+    if os.path.exists(CF_BIN) and os.path.getsize(CF_BIN) > 1000000:
         RES["cf"] = True
         return
     rc, out = sh("curl -sL -o " + CF_BIN +
@@ -212,7 +191,8 @@ app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
 say("app စတင်နေတယ်...")
 
-cf_proc = subprocess.Popen([CF_BIN, "tunnel", "--no-autoupdate", "run", "--token", CF_TOKEN],
+cf_proc = subprocess.Popen([CF_BIN, "tunnel", "--no-autoupdate", "--protocol", "http2",
+                            "run", "--token", CF_TOKEN],
                            stdout=open(CF_LOG, "w"), stderr=subprocess.STDOUT)
 say("cloudflared စတင်နေတယ်...")
 
@@ -266,6 +246,10 @@ while True:
     if app_proc.poll() is not None:
         print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode}) — log:\n")
         print(read(LOG))
+        break
+    if cf_proc.poll() is not None:
+        print("❌ cloudflared ရပ်သွားပြီ — log:\n")
+        print(read(CF_LOG))
         break
 '''
 
@@ -344,8 +328,15 @@ def show_link():
 
 
 def run(force):
-    if not KAGGLE_KEY or not CF_TOKEN:
-        st.error("Secrets ထဲမှာ KAGGLE_KEY နဲ့ CF_TUNNEL_TOKEN ထည့်ပါ။")
+    missing = [n for n, v in (("KAGGLE_KEY", KAGGLE_KEY), ("CF_TUNNEL_TOKEN", CF_TOKEN)) if not v]
+    if missing:
+        st.error("Secrets ထဲမှာ ထည့်ပါ: " + ", ".join(missing))
+        return
+
+    try:
+        from kaggle.api.kaggle_api_extended import KaggleApi
+    except Exception as e:
+        st.error(f"Kaggle package error: {e}")
         return
 
     with st.status("စစ်ဆေးနေတယ်...", expanded=False) as s:
@@ -398,12 +389,18 @@ def run(force):
             return
 
         s.update(label="Domain စစ်နေတယ်...")
+        alive = False
         for _ in range(20):
             if is_alive(DOMAIN_URL):
+                alive = True
                 break
             time.sleep(3)
 
-        s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+        if alive:
+            s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+        else:
+            s.update(label="Domain မတက်သေးပါ", state="error")
+            st.warning("VPN ဖွင့်ပြီး ပြန်စမ်းပါ၊ ဒါမှမဟုတ် မိနစ်အနည်းငယ်စောင့်ပါ။")
 
     show_link()
 
