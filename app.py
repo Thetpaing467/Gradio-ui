@@ -2,61 +2,61 @@ import os, json, time, tempfile
 import requests
 import streamlit as st
 
-# ==========================================
-# ⚙️ ခင်ဗျားရဲ့ အချက်အလက်တွေ
-# ==========================================
-KAGGLE_USERNAME = "thetuaiaa"
-KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
+# ---------------- ဒီနေရာ ပြင်ပါ ----------------
+# Key ကို code ထဲ တိုက်ရိုက်မရေးပါနဲ့။ Streamlit secrets (KAGGLE_USERNAME / KAGGLE_KEY) မှာထည့်ပါ
+KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
+KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", "ဒီမှာ-key-အသစ်ထည့်ပါ"))
 SLUG = "my-link-runner"
-GPU_ENABLED = False          # ✅ CPU only
+GPU_ENABLED = False   # app crash ဖြစ်ရင် True ပြောင်းကြည့်ပါ
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
+SUBDOMAIN = ""        # Serveo ပုံသေနာမည်မလိုရင် ဗလာထားပါ
+NGROK_TOKEN = ""      # ngrok account token ရှိရင်ထည့်ပါ (မရှိရင် ဗလာ)
+# -----------------------------------------------
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 from kaggle.api.kaggle_api_extended import KaggleApi
 
-st.set_page_config(page_title="Kaggle Gradio Link", page_icon="🔗")
-st.title("🔗 Kaggle Gradio Share Link ထုတ်စက် (CPU)")
+st.set_page_config(page_title="Link ထုတ်စက်", page_icon="🔗")
+st.title("🔗 Public Link ထုတ်စက် (Multi Tunnel)")
 
-# ==========================================
-# Kaggle မှာ Run မယ့် Script (CPU-only)
-# ==========================================
 KAGGLE_SCRIPT = r'''
-import os, re, sys, time, subprocess, threading, urllib.request
+import os, re, sys, time, subprocess, threading, urllib.request, tarfile, stat
 from importlib import metadata
 import requests
 
-# ==========================================
-# ⭐ CPU-ONLY ENV
-# ==========================================
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-os.environ["CT2_FORCE_CPU"] = "1"
-os.environ["OMP_NUM_THREADS"] = "4"
-os.environ["MKL_NUM_THREADS"] = "4"
-os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
-os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 NTFY_TOPIC = "__TOPIC__"
+SUB = "__SUB__"
+NGROK_TOKEN = "__NGROK__"
 REPO_URL = "https://github.com/Thetpaing467/new.git"
 REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
 PORT = 7860
 LOG = "/kaggle/working/app.log"
 T0 = time.time()
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "ExitOnForwardFailure=yes"]
+
 
 def say(msg):
     print(f"[{time.time() - T0:5.1f}s] {msg}", flush=True)
 
+
 def sh(cmd):
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     return p.returncode, (p.stdout + p.stderr)
+
 
 def tail_log(n=3000):
     try:
         return open(LOG, encoding="utf-8", errors="ignore").read()[-n:]
     except Exception:
         return "(log မရှိသေးပါ)"
+
 
 def post(kind, text):
     try:
@@ -65,12 +65,180 @@ def post(kind, text):
     except Exception as e:
         print("ntfy error:", e)
 
+
 post("start", "1")
 sh("pkill -f '[p]ython.*app.py'")
 time.sleep(1)
 
-# ---------------------------------------------------------- App ပြင်ဆင်ခြင်း
+
+# ============================================================ tunnel အားလုံး
+def tunnel_loop(name, build_cmd, rx, fmt=None, wait=60, prep=None):
+    """tunnel တစ်ခုကို run မယ်။ link ထွက်ရင် ntfy ပို့မယ်။ ပြတ်ရင် ပြန်ချိတ်မယ်။"""
+    try:
+        if prep and not prep():
+            say(f"{name} ကျော်လိုက်တယ် (မအောင်မြင်)")
+            return
+    except Exception as e:
+        say(f"{name} prep error: {e}")
+        return
+    rx = re.compile(rx)
+    fails = 0
+    while True:
+        try:
+            say(f"{name} ချိတ်နေတယ်")
+            p = subprocess.Popen(build_cmd(), stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            state = {"got": False}
+            timer = threading.Timer(wait, lambda: None if state["got"] else p.kill())
+            timer.daemon = True
+            timer.start()
+            for line in p.stdout:
+                line = ANSI.sub("", line)
+                m = rx.search(line)
+                if m:
+                    url = fmt(m) if fmt else m.group(0)
+                    state["got"] = True
+                    say(f"{name} ✅ {url}")
+                    post("tun", f"{name}={url}")
+                elif not state["got"]:
+                    print(f"[{name}] {line.rstrip()[:200]}", flush=True)
+            timer.cancel()
+            p.wait()
+        except Exception as e:
+            say(f"{name} error: {e}")
+            state = {"got": False}
+        fails = 0 if state["got"] else fails + 1
+        say(f"{name} ပြတ်သွားတယ် — ပြန်ချိတ်မယ် (fail {fails})")
+        if fails >= 6:
+            say(f"{name} ၆ ကြိမ်ဆက်ရှုံး — ရပ်လိုက်တယ်")
+            return
+        time.sleep(3 if state["got"] else min(5 * fails, 30))
+
+
+def need_ssh():
+    if sh("which ssh")[0] != 0:
+        sh("apt-get update -qq && apt-get install -y -qq openssh-client")
+    return sh("which ssh")[0] == 0
+
+
+NODE_LOCK = threading.Lock()
+
+
+def need_node():
+    with NODE_LOCK:
+        if sh("which npx")[0] != 0:
+            say("nodejs/npm သွင်းနေတယ်...")
+            sh("apt-get update -qq")
+            sh("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs npm")
+        return sh("which npx")[0] == 0
+
+
+def wait_app_port():
+    """app port တက်မှ tunnelmole စမယ် (မဟုတ်ရင် 'nothing running on port' နဲ့ ထွက်သွားတယ်)"""
+    for _ in range(900):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=2)
+            return True
+        except Exception:
+            time.sleep(2)
+    return False
+
+
+def need_node_and_app():
+    return need_node() and wait_app_port()
+
+
+def download(url, dest):
+    r = requests.get(url, timeout=120, stream=True, allow_redirects=True)
+    r.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in r.iter_content(1 << 20):
+            f.write(chunk)
+
+
+CF_BIN = "/kaggle/working/cloudflared"
+
+
+def need_cloudflared():
+    if not os.path.exists(CF_BIN):
+        download("https://github.com/cloudflare/cloudflared/releases/latest/download/"
+                 "cloudflared-linux-amd64", CF_BIN)
+        os.chmod(CF_BIN, os.stat(CF_BIN).st_mode | stat.S_IEXEC)
+    return True
+
+
+BORE_BIN = "/kaggle/working/bore"
+
+
+def need_bore():
+    if not os.path.exists(BORE_BIN):
+        tgz = "/kaggle/working/bore.tgz"
+        download("https://github.com/ekzhang/bore/releases/download/v0.5.1/"
+                 "bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz", tgz)
+        with tarfile.open(tgz) as t:
+            t.extractall("/kaggle/working")
+        os.chmod(BORE_BIN, os.stat(BORE_BIN).st_mode | stat.S_IEXEC)
+    return True
+
+
+def ngrok_thread():
+    try:
+        sh(f"{sys.executable} -m pip install -q pyngrok")
+        from pyngrok import ngrok
+        ngrok.set_auth_token(NGROK_TOKEN)
+        while True:
+            try:
+                t = ngrok.connect(PORT, "http")
+                url = t.public_url.replace("http://", "https://")
+                say(f"ngrok ✅ {url}")
+                post("tun", f"ngrok={url}")
+                while True:
+                    time.sleep(30)
+                    if not ngrok.get_tunnels():
+                        break
+            except Exception as e:
+                say(f"ngrok error: {e}")
+                time.sleep(10)
+    except Exception as e:
+        say(f"ngrok ကျော်: {e}")
+
+
+TUNNELS = [
+    # (name, build_cmd, regex, fmt, wait, prep)
+    ("pinggy",
+     lambda: ["ssh"] + SSH_OPTS + ["-p", "443", f"-R0:localhost:{PORT}", "free.pinggy.io"],
+     r"https://[a-z0-9\-]+\.(?:a\.)?free\.pinggy\.(?:link|online)", None, 60, need_ssh),
+    ("localhost.run",
+     lambda: ["ssh"] + SSH_OPTS + ["-R", f"80:localhost:{PORT}", "nokey@localhost.run"],
+     r"https://[a-z0-9]+\.lhr\.life", None, 60, need_ssh),
+    ("serveo",
+     lambda: ["ssh"] + SSH_OPTS + ["-R", (f"{SUB}:80:localhost:{PORT}" if SUB else f"80:localhost:{PORT}"),
+                                   "serveo.net"],
+     r"https://(?!console\.)[a-z0-9\-]+\.serveousercontent\.com", None, 40, need_ssh),
+    ("cloudflare",
+     lambda: [CF_BIN, "tunnel", "--url", f"http://localhost:{PORT}",
+              "--no-autoupdate", "--protocol", "http2"],
+     r"https://[a-z0-9\-]+\.trycloudflare\.com", None, 90, need_cloudflared),
+    ("bore",
+     lambda: [BORE_BIN, "local", str(PORT), "--to", "bore.pub"],
+     r"bore\.pub:(\d+)", lambda m: f"http://bore.pub:{m.group(1)}", 60, need_bore),
+    ("tunnelmole",
+     lambda: ["npx", "--yes", "tunnelmole", str(PORT)],
+     r"https://[a-z0-9\-]+\.tunnelmole\.(?:net|com)", None, 120, need_node_and_app),
+    ("localtunnel",
+     lambda: ["npx", "--yes", "localtunnel", "--port", str(PORT)],
+     r"https://[a-z0-9\-]+\.loca\.lt", None, 120, need_node),
+]
+
+for name, cmd, rx, fmt, wait, prep in TUNNELS:
+    threading.Thread(target=tunnel_loop, args=(name, cmd, rx, fmt, wait, prep),
+                     daemon=True).start()
+if NGROK_TOKEN:
+    threading.Thread(target=ngrok_thread, daemon=True).start()
+
+# ============================================================ app ပြင်ဆင်ခြင်း
 RES = {}
+
 
 def task_git():
     if os.path.exists(REPO_DIR):
@@ -79,6 +247,7 @@ def task_git():
         rc, out = sh(f"git clone -q --depth 1 {REPO_URL} {REPO_DIR}")
     RES["git"] = (rc, out)
     say("git ✅" if rc == 0 else f"git ❌ {out[-300:]}")
+
 
 def task_pip():
     need = {
@@ -110,6 +279,7 @@ def task_pip():
     RES["pip"] = True
     say("pip ✅")
 
+
 def task_apt():
     need = ["ffmpeg", "libraqm0", "libfribidi0", "fonts-noto-core", "fonts-noto-cjk",
             "fonts-dejavu-core", "fonts-sil-padauk"]
@@ -125,6 +295,7 @@ def task_apt():
     RES["apt"] = True
     say("apt ✅ (ffmpeg / fonts ပြီး)")
 
+
 t_git = threading.Thread(target=task_git)
 t_pip = threading.Thread(target=task_pip)
 t_apt = threading.Thread(target=task_apt)
@@ -136,8 +307,8 @@ t_pip.join()
 if RES.get("git", (1,))[0] != 0:
     post("error", "git clone/update မအောင်မြင်ပါ: " + RES["git"][1][-300:])
     raise SystemExit("git မအောင်မြင်ပါ")
-
 os.chdir(REPO_DIR)
+print("Repo files:", sorted(os.listdir(".")))
 if not os.path.exists(APP_FILE):
     post("error", "app.py repo ထဲမှာ မရှိပါ")
     raise SystemExit("app.py မရှိပါ")
@@ -146,83 +317,71 @@ fonts = [f for f in os.listdir(".") if f.lower().endswith((".ttf", ".otf", ".ttc
 if fonts:
     os.environ["RECAP_FONT"] = os.path.abspath(
         "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
-
-# ⭐ Gradio Share Link ကို ဖမ်းယူဖို့ Wrapper
-WRAPPER = """
-import runpy, gradio, sys
-
-_original_launch = gradio.Blocks.launch
-def _patched_launch(self, *args, **kwargs):
-    kwargs['share'] = True
-    kwargs['server_name'] = '0.0.0.0'
-    return _original_launch(self, *args, **kwargs)
-gradio.Blocks.launch = _patched_launch
-
-sys.argv = ["app.py"]
-runpy.run_path("app.py", run_name="__main__")
-"""
-with open("_gradio_share_wrapper.py", "w") as f:
-    f.write(WRAPPER)
+    print("Font:", os.environ["RECAP_FONT"])
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
 env = dict(os.environ, PORT=str(PORT))
-app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
-                            stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
-say("app စတင်နေတယ် (Gradio Share, CPU mode)...")
 
-# Log ထဲက Gradio Share Link ကို ရှာ
-GRADIO_LINK_PATTERN = re.compile(r"https://[a-zA-Z0-9\-]+\.gradio\.live")
-found_link = False
-ready = False
 
-# ⭐ FIX: link ရော app ready ရော နှစ်ခုလုံးရမှ break
-for _ in range(1200):
-    if app_proc.poll() is not None:
-        print(f"❌ App crash (exit {app_proc.returncode}) — log:\n")
-        print(tail_log())
-        post("error", "App crash: " + tail_log(400))
-        break
+def start_app():
+    return subprocess.Popen([sys.executable, "-u", APP_FILE],
+                            stdout=open(LOG, "a"), stderr=subprocess.STDOUT, env=env)
 
-    if not found_link:
-        m = GRADIO_LINK_PATTERN.search(tail_log(8000))
-        if m:
-            found_link = True
-            link = m.group(0)
-            say(f"gradio_share ✅ {link}")
-            post("cloudflare", link)
 
-    if not ready:
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=1)
-            ready = True
-            say("app ✅")
-        except Exception:
-            pass
+def app_ok(timeout=5):
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=timeout)
+        return True
+    except Exception:
+        return False
 
-    if ready and found_link:
-        post("ready", "1")
-        break
 
-    time.sleep(0.5)
+def wait_up(proc, secs=180):
+    for _ in range(int(secs * 2)):
+        if proc.poll() is not None or app_ok(1):
+            break
+        time.sleep(0.5)
+    return app_ok()
 
-if not (ready and found_link):
-    print("⚠️ App/Link မရသေးဘူး — log:\n")
+
+app_proc = start_app()
+say("app စတင်နေတယ်...")
+if wait_up(app_proc, 180):
+    say("app ✅")
+    post("ready", "1")
+else:
+    print("⚠️ App မတက်သေးဘူး — log:\n")
     print(tail_log())
-    post("error", "App/Share link မရပါ: " + tail_log(400))
-    raise SystemExit("ရပ်လိုက်တယ်။")
+    post("error", "App မတက်ပါ: " + tail_log(400))
 
+# ============================================================ watchdog
+crashes, bad = 0, 0
 print(f"Running... log: {LOG}")
 while True:
-    time.sleep(30)
+    time.sleep(10)
     if app_proc.poll() is not None:
-        print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode}) — log:\n")
-        print(tail_log())
-        break
+        crashes += 1
+        say(f"❌ App ရပ်သွားတယ် (exit {app_proc.returncode}) — ပြန်စမယ် #{crashes}")
+        print(tail_log(1500))
+        time.sleep(min(5 * crashes, 30))
+        app_proc = start_app()
+        bad = 0
+        if wait_up(app_proc, 120):
+            say("app ပြန်တက်ပြီ ✅")
+            post("ready", "1")
+        continue
+    # process ရှိပေမဲ့ မတုံ့ပြန်ရင် (hang) ၃ ကြိမ်ဆက်ရှုံးမှ သတ်မယ်
+    bad = 0 if app_ok(8) else bad + 1
+    if bad >= 3:
+        say("⚠️ App hang ဖြစ်နေတယ် — kill ပြီး ပြန်စမယ်")
+        app_proc.kill()
+        bad = 0
 '''
 
-# ==========================================
-# Helpers (Streamlit UI အတွက်)
-# ==========================================
+
+# ------------------------------------------------------------ helpers
 def read_state():
+    """ntfy ကနေ link အားလုံး (tunnel နာမည်အလိုက် နောက်ဆုံး link) ကို ဖတ်"""
     links, ready, error, start_t = {}, False, None, 0
     try:
         r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
@@ -239,8 +398,9 @@ def read_state():
             kind, val = msg.split("|", 1)
             if kind == "start":
                 links, ready, error, start_t = {}, False, None, d.get("time", 0)
-            elif kind == "cloudflare":
-                links["gradio"] = val
+            elif kind == "tun" and "=" in val:
+                name, url = val.split("=", 1)
+                links[name] = url
             elif kind == "ready":
                 ready = True
             elif kind == "error":
@@ -249,12 +409,18 @@ def read_state():
         pass
     return links, ready, error, start_t
 
+
 def is_alive(url):
     try:
-        r = requests.get(url, timeout=10, allow_redirects=True)
-        return r.status_code == 200
+        r = requests.get(url, timeout=8, allow_redirects=True)
+        return r.status_code < 500 or r.status_code == 511
     except Exception:
         return False
+
+
+def alive_links(links):
+    return {n: u for n, u in links.items() if is_alive(u)}
+
 
 def kernel_busy(api):
     try:
@@ -264,8 +430,23 @@ def kernel_busy(api):
     except Exception:
         return False
 
+
+def show_links(links, checked=None):
+    st.markdown("### 🔗 Public Links")
+    st.caption("ဖုန်းမှာ VPN ပိတ်ပြီး တစ်ခုချင်း နှိပ်စမ်းကြည့်ပါ၊ ဖွင့်လို့ရတာကို သုံးပါ။")
+    for name, url in links.items():
+        mark = ""
+        if checked is not None:
+            mark = " ✅" if name in checked else " ❔"
+        st.markdown(f"**{name}**{mark}")
+        st.markdown(f"[{url}]({url})")
+        st.code(url)
+
+
 def push_kernel(api):
-    code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
+    code = (KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
+            .replace("__SUB__", SUBDOMAIN)
+            .replace("__NGROK__", NGROK_TOKEN))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
@@ -276,30 +457,33 @@ def push_kernel(api):
         "language": "python",
         "kernel_type": "script",
         "is_private": "true",
-        "enable_gpu": "false",       # ✅ CPU only
+        "enable_gpu": "true" if GPU_ENABLED else "false",
         "enable_internet": "true",
     }
     with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
         json.dump(meta, f)
     api.kernels_push(folder)
 
+
 def run(force):
-    status, box = st.empty(), st.empty()
+    status = st.empty()
     api = KaggleApi()
     api.authenticate()
 
+    # ၁။ အရင် link သုံးလို့ရသေးရင် ပြန်သုံး
     if not force:
-        links, _, _, _ = read_state()
-        alive = {k: v for k, v in links.items() if is_alive(v)}
-        if alive:
-            status.success("♻️ အရင် Gradio Link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
-            for k, v in alive.items():
-                st.code(v)
-            return
+        links, ready, _, _ = read_state()
+        if links and ready:
+            ok = alive_links(links)
+            if ok:
+                status.success("♻️ အရင် link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
+                show_links(links, ok)
+                return
 
+    # ၂။ Kaggle session run နေရင် push မလုပ်ဘဲ စောင့်
     pushed, t_push = False, 0
     if not force and kernel_busy(api):
-        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — link စောင့်နေတယ်...")
+        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — စောင့်နေတယ်...")
     else:
         try:
             push_kernel(api)
@@ -307,48 +491,42 @@ def run(force):
             status.error(f"Push မအောင်မြင်ပါ: {e}")
             return
         pushed, t_push = True, time.time()
-        status.info("⏳ Kaggle စတင်နေတယ် (CPU) — Gradio Share ထုတ်နေတယ်...")
+        status.info("⏳ Kaggle စတင်နေတယ်...")
 
     fresh_after = (t_push - 10) if pushed else 0
+    ready_polls = 0
 
+    # ၃။ စောင့် (၂ စက္ကန့်တစ်ခါ၊ ၁၀ မိနစ်အထိ)
     for _ in range(300):
         links, ready, error, start_t = read_state()
         fresh = start_t > 0 and start_t >= fresh_after
-
-        if fresh and links:
-            box.info(f"🔗 Link ရပါပြီ- {list(links.values())[0]}")
-            if not ready:
-                status.info("⏳ App စတက်နေတယ်... ခဏနေမှ ဖွင့်ပါ (CPU မှာ ၁-၃ မိနစ် ကြာနိုင်ပါတယ်)")
 
         if fresh and error:
             status.error(f"❌ Kaggle မှာ error: {error}")
             return
 
+        if fresh and links and not ready:
+            status.info(f"⏳ Tunnel {len(links)} ခု ရပါပြီ၊ App စတက်နေတယ်... (၁–၃ မိနစ်)")
+
         if fresh and ready and links:
-            alive = {k: v for k, v in links.items() if is_alive(v)}
-            if alive:
-                status.success("✅ Gradio Link အဆင်သင့်ဖြစ်ပါပြီ!")
-                box.empty()
-                for k, v in alive.items():
-                    st.markdown(f"### 🔗 Gradio Link: [{v}]({v})")
-                    st.code(v)
-                    st.info("💡 ဒီ Link က Gradio ရဲ့ ကိုယ်ပိုင် Link ဖြစ်လို့ VPN ခံနိုင်ပြီး Error ကင်းပါတယ်။")
+            ok = alive_links(links)
+            if ok:
+                status.success(f"✅ App အဆင်သင့်ဖြစ်ပါပြီ! ({len(ok)}/{len(links)} link စစ်ပြီး)")
+                show_links(links, ok)
+                return
+            ready_polls += 1
+            status.info("⏳ App တက်ပြီ၊ Link ချိတ်ဆက်မှု စစ်နေတယ်...")
+            if ready_polls >= 15:
+                status.warning("⚠️ Streamlit ကနေ စစ်လို့မရပေမဲ့ link တွေကို ကိုယ်တိုင် စမ်းကြည့်ပါ")
+                show_links(links)
                 return
         time.sleep(2)
 
     status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
 
-# ==========================================
-# Streamlit UI
-# ==========================================
-st.info(
-    "🚀 ဒီစနစ်က **Gradio ရဲ့ ကိုယ်ပိုင် Link** (`.gradio.live`) ကို **CPU-only** နဲ့ ထုတ်ပေးမှာပါ။\n\n"
-    "- GPU quota မကုန်ပါ\n"
-    "- CPU session ~12 နာရီ ကြာနိုင်ပါတယ်\n"
-    "- faster-whisper ကို CPU mode (`CT2_FORCE_CPU=1`) ဖိသတ်မှတ်ထားပါတယ်"
-)
 
-if st.button("🚀 Gradio Link ယူမယ်"):
+# ------------------------------------------------------------ UI
+if st.button("🚀 Link ယူမယ် (ရှိပြီးသား သုံးလို့ရရင် ပြန်သုံးမယ်)"):
     run(False)
 
 if st.button("🔄 အသစ်အတင်းထုတ်မယ်"):
