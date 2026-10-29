@@ -6,7 +6,7 @@ import streamlit as st
 # ⚙️ Settings  (key ကို Streamlit secrets ထဲထည့်ပါ)
 # .streamlit/secrets.toml  သို့မဟုတ် Streamlit Cloud > Secrets
 #   KAGGLE_USERNAME = "thetuaiaa"
-#   KAGGLE_KEY = "NEW_KEY_HERE"
+#   KAGGLE_KEY = "KGAT_28b2b967d309484510ffc764b8130e69"
 # ==========================================
 KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
 KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", ""))
