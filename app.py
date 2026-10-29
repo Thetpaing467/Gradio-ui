@@ -3,9 +3,8 @@ import requests
 import streamlit as st
 
 # ---------------- ဒီနေရာ ပြင်ပါ ----------------
-# Key ကို code ထဲ တိုက်ရိုက်မရေးပါနဲ့။ Streamlit secrets (KAGGLE_USERNAME / KAGGLE_KEY) မှာထည့်ပါ
-KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
-KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", "ဒီမှာ-key-အသစ်ထည့်ပါ"))
+KAGGLE_USERNAME = "thetuaiaa"
+KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"   # key အသစ်ထုတ်ခဲ့ရင် ဒီနေရာမှာ အစားထိုးပါ
 SLUG = "my-link-runner"
 GPU_ENABLED = False   # app crash ဖြစ်ရင် True ပြောင်းကြည့်ပါ
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
