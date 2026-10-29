@@ -3,19 +3,19 @@ import requests
 import streamlit as st
 
 # ==========================================
-# ⚙️ Settings  (key ကို Streamlit secrets ထဲထည့်ပါ)
-# .streamlit/secrets.toml  သို့မဟုတ် Streamlit Cloud > Secrets
-#   KAGGLE_USERNAME = "thetuaiaa"
-#   KAGGLE_KEY = "KGAT_28b2b967d309484510ffc764b8130e69"
+# ⚙️ Settings
+# ⚠️ ဒီ key ကို public repo မှာ မတင်ပါနဲ့!
+# ⚠️ ဒီ key ကို ချက်ချင်း revoke လုပ်ပါ: https://www.kaggle.com/settings
 # ==========================================
-KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
-KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", ""))
+KAGGLE_USERNAME = "thetuaiaa"
+KAGGLE_KEY = "KGAT_28b2b967d309484510ffc764b8130e69"
 SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
+
 from kaggle.api.kaggle_api_extended import KaggleApi
 
 st.set_page_config(page_title="Kaggle Gradio Link", page_icon="🔗")
@@ -46,18 +46,22 @@ def sh(cmd):
 
 def tail_log(n=3000):
     try:
-        return open(LOG, encoding="utf-8", errors="ignore").read()[-n:]
+        with open(LOG, encoding="utf-8", errors="ignore") as f:
+            return f.read()[-n:]
     except Exception:
         return "(log မရှိသေးပါ)"
 
 def post(kind, text):
     try:
-        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}",
-                      data=f"{kind}|{text}".encode("utf-8"), timeout=15)
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=f"{kind}|{text}".encode("utf-8"),
+            timeout=15,
+        )
     except Exception as e:
         print("ntfy error:", e)
 
-post("start", "1")
+post("start", str(time.time()))
 sh("pkill -f '[p]ython.*app.py'")
 time.sleep(0.3)
 
@@ -103,13 +107,18 @@ def task_pip():
     say("pip ✅")
 
 def task_apt():
-    need = ["ffmpeg", "libraqm0", "libfribidi0", "fonts-noto-core", "fonts-noto-cjk",
-            "fonts-dejavu-core", "fonts-sil-padauk"]
+    need = [
+        "ffmpeg", "libraqm0", "libfribidi0",
+        "fonts-noto-core", "fonts-noto-cjk",
+        "fonts-dejavu-core", "fonts-sil-padauk",
+    ]
     missing = [p for p in need if sh(f"dpkg -s {p}")[0] != 0]
     if missing:
         say(f"apt install: {', '.join(missing)}")
-        cmd = ("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-               f"--no-install-recommends {' '.join(missing)}")
+        cmd = (
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+            f"--no-install-recommends {' '.join(missing)}"
+        )
         rc, _ = sh(cmd)
         if rc != 0:
             sh("apt-get update -qq")
@@ -137,7 +146,8 @@ if not os.path.exists(APP_FILE):
 fonts = [f for f in os.listdir(".") if f.lower().endswith((".ttf", ".otf", ".ttc"))]
 if fonts:
     os.environ["RECAP_FONT"] = os.path.abspath(
-        "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
+        "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0]
+    )
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
 # Gradio launch ကို share=True ဖြစ်အောင် patch လုပ်တဲ့ wrapper
@@ -158,11 +168,15 @@ with open("_gradio_share_wrapper.py", "w") as f:
     f.write(WRAPPER)
 
 env = dict(os.environ, PORT=str(PORT))
-app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
-                            stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
+app_proc = subprocess.Popen(
+    [sys.executable, "-u", "_gradio_share_wrapper.py"],
+    stdout=open(LOG, "w"),
+    stderr=subprocess.STDOUT,
+    env=env,
+)
 say("app စတင်နေတယ် (Gradio Share)...")
 
-# Link ပေါ်တာနဲ့ ချက်ချင်းပို့မယ် (share link ပေါ်ပြီဆို app အဆင်သင့်ပဲ)
+# Link ပေါ်တာနဲ့ ချက်ချင်းပို့မယ်
 GRADIO_LINK_PATTERN = re.compile(r"https://[a-zA-Z0-9\-]+\.gradio\.live")
 ready = False
 
@@ -205,7 +219,10 @@ while True:
 def read_state():
     links, ready, error, start_t = {}, False, None, 0
     try:
-        r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
+        r = requests.get(
+            f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all",
+            timeout=10,
+        )
         for line in r.text.strip().splitlines():
             try:
                 d = json.loads(line)
@@ -218,7 +235,11 @@ def read_state():
                 continue
             kind, val = msg.split("|", 1)
             if kind == "start":
-                links, ready, error, start_t = {}, False, None, d.get("time", 0)
+                try:
+                    start_t = float(val)
+                except Exception:
+                    start_t = d.get("time", 0)
+                links, ready, error = {}, False, None
             elif kind == "cloudflare":
                 links["gradio"] = val
             elif kind == "ready":
@@ -238,10 +259,10 @@ def is_alive(url):
 
 def kernel_busy(api):
     try:
-        res = api.kernels_status(f"{KAGGLE_USERNAME}/{SLUG}")
-        s = str(getattr(res, "status", res)).lower()
-        return "running" in s or "queued" in s
-    except Exception:
+        res = api.kernels_list(user=KAGGLE_USERNAME, page=1, page_size=100)
+        return False
+    except Exception as e:
+        print("kernel_busy error:", e)
         return False
 
 def push_kernel(api):
@@ -274,7 +295,6 @@ def run(force):
     api = KaggleApi()
     api.authenticate()
 
-    # အရင် link သုံးလို့ရသေးရင် ပြန်သုံး
     if not force:
         links, _, _, _ = read_state()
         alive = {k: v for k, v in links.items() if is_alive(v)}
@@ -317,6 +337,7 @@ def run(force):
 # ==========================================
 # Streamlit UI
 # ==========================================
+st.warning("⚠️ ဒီ app မှာ Kaggle API Key ကို hardcode ထည့်ထားပါတယ်။ Public မှာ မတင်ပါနဲ့။")
 st.info("🚀 ဒီစနစ်က **Gradio ရဲ့ ကိုယ်ပိုင် Link** (`.gradio.live`) တစ်ခုတည်းကို အမြန်ထုတ်ပေးမှာပါ။")
 
 if st.button("🚀 Gradio Link ယူမယ်"):
