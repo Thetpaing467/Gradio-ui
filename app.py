@@ -3,14 +3,28 @@ import requests
 import streamlit as st
 
 # ==========================================
-# Settings  (Streamlit Secrets)
-#   KAGGLE_USERNAME = "thetuaiaa"
-#   KAGGLE_KEY      = "kgl-k-7f3a9c2e51b84d06"
-#   CF_TUNNEL_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
+# Settings
 # ==========================================
-KAGGLE_USERNAME = st.secrets.get("KAGGLE_USERNAME", os.environ.get("KAGGLE_USERNAME", "thetuaiaa"))
-KAGGLE_KEY = st.secrets.get("KAGGLE_KEY", os.environ.get("KAGGLE_KEY", ""))
-CF_TOKEN = st.secrets.get("CF_TUNNEL_TOKEN", os.environ.get("CF_TUNNEL_TOKEN", ""))
+# Secrets မှာ မထည့်ထားရင် ဒီကွက်လပ်တွေကို အသုံးပြုသွားပါမယ်
+DEFAULT_KAGGLE_USERNAME = "thetuaiaa"
+DEFAULT_KAGGLE_KEY = "kgl-k-7f3a9c2e51b84d06"
+DEFAULT_CF_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
+
+try:
+    KAGGLE_USERNAME = st.secrets["KAGGLE_USERNAME"]
+except Exception:
+    KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", DEFAULT_KAGGLE_USERNAME)
+
+try:
+    KAGGLE_KEY = st.secrets["KAGGLE_KEY"]
+except Exception:
+    KAGGLE_KEY = os.environ.get("KAGGLE_KEY", DEFAULT_KAGGLE_KEY)
+
+try:
+    CF_TOKEN = st.secrets["CF_TUNNEL_TOKEN"]
+except Exception:
+    CF_TOKEN = os.environ.get("CF_TUNNEL_TOKEN", DEFAULT_CF_TOKEN)
+
 DOMAIN_URL = "https://tpokemb.dpdns.org"
 SLUG = "my-link-runner"
 GPU_ENABLED = False
@@ -18,7 +32,12 @@ TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
-from kaggle.api.kaggle_api_extended import KaggleApi
+
+try:
+    from kaggle.api.kaggle_api_extended import KaggleApi
+except ImportError:
+    st.error("Kaggle package မရှိပါ။ `pip install kaggle` လုပ်ပါ။")
+    st.stop()
 
 st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
 
