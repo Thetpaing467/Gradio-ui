@@ -129,7 +129,7 @@ def task_pip():
         quoted = " ".join(f"'{m}'" for m in missing)
         if sh("uv --version")[0] != 0:
             sh(f"{sys.executable} -m pip install -q uv")
-        rc, out = sh(f"uv pip install --system -q {quoted}")
+        rc, out = sh(f"uv pip install --python {sys.executable} -q {quoted}")
         if rc != 0:
             rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
         if rc != 0:
@@ -343,7 +343,7 @@ def run(force):
         fresh_after = (t_push - 10) if pushed else 0
         ok, final_link = False, None
 
-        for _ in range(600):
+        for _ in range(600 if pushed else 60):
             ready, error, start_t, link = read_state()
             fresh = start_t > 0 and start_t >= fresh_after
 
@@ -359,7 +359,13 @@ def run(force):
 
         if not ok:
             s.update(label="အချိန်ကုန်သွားတယ်", state="error")
-            st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
+            if not pushed:
+                st.warning(
+                    "Kaggle မှာ script အဟောင်း run နေတုန်း ဖြစ်နိုင်တယ်။ "
+                    "Kaggle → Your Work ထဲက session ကို Stop လုပ်ပြီး 🔄 ပြန်စမယ် ကို နှိပ်ပါ။"
+                )
+            else:
+                st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
             return
 
         s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
