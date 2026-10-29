@@ -1,4 +1,4 @@
-import os, json, time, tempfile
+import os, json, time, tempfile, subprocess, sys
 import requests
 import streamlit as st
 
@@ -7,9 +7,7 @@ st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centere
 # ==========================================
 # Settings
 # ==========================================
-
 KAGGLE_USERNAME = "thetuaiaa"
-# Token အသစ်ကို ဒီနေရာမှာ အစားထိုး ထည့်သွင်းထားပါတယ်
 KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c" 
 CF_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
 
@@ -18,8 +16,22 @@ SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
+# ==========================================
+# Kaggle Setup (File ဖန်တီးခြင်း)
+# ==========================================
+# Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ
+os.system("pip install -U kaggle -q")
+
+# Token အသစ်အတွက် kaggle.json ဖန်တီးပါ
+kaggle_cred = {"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}
+os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
+with open(os.path.expanduser("~/.kaggle/kaggle.json"), "w") as f:
+    json.dump(kaggle_cred, f)
+os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 0o600)
+
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
+os.environ["KAGGLE_API_TOKEN"] = KAGGLE_KEY
 
 st.markdown(
     """
