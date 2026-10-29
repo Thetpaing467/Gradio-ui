@@ -1,4 +1,4 @@
-import os, json, time, tempfile
+import os, json, time, tempfile, re
 import requests
 import streamlit as st
 
@@ -7,33 +7,22 @@ st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centere
 # ==========================================
 # Settings
 # ==========================================
-# Secrets ကို .streamlit/secrets.toml (ဒါမှမဟုတ် Streamlit Cloud Secrets) ထဲမှာ ထည့်ပါ
-#   KAGGLE_USERNAME = "thetuaiaa"
-#   KAGGLE_KEY = "your-new-key"
-def _secret(name, default=""):
-    try:
-        return st.secrets[name]
-    except Exception:
-        return os.environ.get(name, default)
-
-KAGGLE_USERNAME = _secret("KAGGLE_USERNAME", "thetuaiaa")
-KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c"
+KAGGLE_USERNAME = "thetuaiaa"
+KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c" 
 
 SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
-# ==========================================
-# Kaggle Setup
-# ==========================================
+# Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ
 os.system("pip install -U kaggle -q")
 
-if KAGGLE_KEY:
-    os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
-    cred_path = os.path.expanduser("~/.kaggle/kaggle.json")
-    with open(cred_path, "w") as f:
-        json.dump({"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}, f)
-    os.chmod(cred_path, 0o600)
+# Token အသစ်အတွက် kaggle.json ဖန်တီးပါ
+kaggle_cred = {"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}
+os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
+with open(os.path.expanduser("~/.kaggle/kaggle.json"), "w") as f:
+    json.dump(kaggle_cred, f)
+os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 0o600)
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
@@ -54,10 +43,10 @@ st.markdown(
 )
 
 # ==========================================
-# Kaggle မှာ Run မယ့် Script
+# Kaggle မှာ Run မယ့် Script (Gradio Share)
 # ==========================================
 KAGGLE_SCRIPT = r'''
-import os, re, sys, time, subprocess, threading
+import os, sys, time, subprocess, threading, re
 from importlib import metadata
 import requests
 
@@ -76,7 +65,7 @@ def sh(cmd):
     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
     return p.returncode, (p.stdout + p.stderr)
 
-def read(path, n=3000):
+def read(path, n=5000):
     try:
         return open(path, encoding="utf-8", errors="ignore").read()[-n:]
     except Exception:
@@ -127,11 +116,7 @@ def task_pip():
     if missing:
         say(f"pip install: {', '.join(missing)}")
         quoted = " ".join(f"'{m}'" for m in missing)
-        if sh("uv --version")[0] != 0:
-            sh(f"{sys.executable} -m pip install -q uv")
-        rc, out = sh(f"uv pip install --python {sys.executable} -q {quoted}")
-        if rc != 0:
-            rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
+        rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
         if rc != 0:
             say(f"pip ❌ {out[-500:]}")
     RES["pip"] = True
@@ -173,12 +158,13 @@ if fonts:
         "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
+# ဒီနေရာမှာ Share=True ဖြစ်အောင် ပြင်ထားပါတယ်
 WRAPPER = """
 import runpy, gradio, sys
 
 _original_launch = gradio.Blocks.launch
 def _patched_launch(self, *args, **kwargs):
-    kwargs['share'] = True
+    kwargs['share'] = True 
     kwargs['server_name'] = '0.0.0.0'
     kwargs['server_port'] = 7860
     return _original_launch(self, *args, **kwargs)
@@ -195,35 +181,41 @@ app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
 say("app စတင်နေတယ်...")
 
-link = None
-for _ in range(1200):
+# Gradio Share Link ကို Log ထဲကနေ ရှာမယ်
+share_url = None
+for _ in range(600):
     if app_proc.poll() is not None:
         print(f"❌ App crash (exit {app_proc.returncode})")
         print(read(LOG))
         post("error", "App crash: " + read(LOG, 400))
-        raise SystemExit("App crash")
-    m = re.search(r"https://[a-zA-Z0-9\-]+\.gradio\.live", read(LOG, 20000))
-    if m:
-        link = m.group(0)
         break
-    time.sleep(0.2)
 
-if not link:
+    log_content = read(LOG, 10000)
+    match = re.search(r'(https://[a-zA-Z0-9\-]+\.gradio\.live)', log_content)
+    
+    if match:
+        share_url = match.group(1)
+        break
+
+    time.sleep(0.5)
+
+if share_url:
+    post("cloudflare", share_url)  # ntfy မှာ link ပို့မယ်
+    post("ready", "1")
+    say(f"ready ✅ {share_url}")
+    print(f"Running... link: {share_url}")
+    
+    while True:
+        time.sleep(30)
+        if app_proc.poll() is not None:
+            print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode})")
+            print(read(LOG))
+            break
+else:
+    print("⚠️ Share Link မထွက်လာပါ — log:\n")
     print(read(LOG))
-    post("error", "Gradio link မရပါ: " + read(LOG, 300))
-    raise SystemExit("link မရပါ")
-
-post("link", link)
-post("ready", "1")
-say(f"ready ✅ {link}")
-
-print(f"Running... log: {LOG}")
-while True:
-    time.sleep(30)
-    if app_proc.poll() is not None:
-        print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode}) — log:\n")
-        print(read(LOG))
-        break
+    post("error", "Share Link မထွက်လာပါ: " + read(LOG, 200))
+    raise SystemExit("ရပ်လိုက်တယ်။")
 '''
 
 # ==========================================
@@ -245,8 +237,8 @@ def read_state():
                 continue
             kind, val = msg.split("|", 1)
             if kind == "start":
-                ready, error, link, start_t = False, None, None, d.get("time", 0)
-            elif kind == "link":
+                ready, error, start_t, link = False, None, d.get("time", 0), None
+            elif kind == "cloudflare": # အခုဒီမှာ gradio link ကို လာထည့်ပါမယ်
                 link = val
             elif kind == "ready":
                 ready = True
@@ -255,14 +247,6 @@ def read_state():
     except Exception:
         pass
     return ready, error, start_t, link
-
-
-def is_alive(url):
-    try:
-        r = requests.get(url, timeout=10, allow_redirects=True)
-        return r.status_code == 200
-    except Exception:
-        return False
 
 
 def kernel_busy(api):
@@ -275,7 +259,8 @@ def kernel_busy(api):
 
 
 def push_kernel(api):
-    code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
+    code = (KAGGLE_SCRIPT
+            .replace("__TOPIC__", TOPIC))
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
@@ -294,14 +279,15 @@ def push_kernel(api):
     api.kernels_push(folder)
 
 
-def show_link(link):
-    st.link_button("🔗 ဖွင့်မယ်", link, use_container_width=True)
-    st.code(link, language=None)
+def show_link(url):
+    st.link_button("🔗 ဖွင့်မယ်", url, use_container_width=True)
+    st.code(url, language=None)
 
 
 def run(force):
-    if not KAGGLE_KEY:
-        st.error("Secrets ထဲမှာ ထည့်ပါ: KAGGLE_KEY")
+    missing = [n for n, v in (("KAGGLE_KEY", KAGGLE_KEY),) if not v]
+    if missing:
+        st.error("Secrets ထဲမှာ ထည့်ပါ: " + ", ".join(missing))
         return
 
     try:
@@ -311,14 +297,6 @@ def run(force):
         return
 
     with st.status("စစ်ဆေးနေတယ်...", expanded=False) as s:
-        # run ပြီးသား link ရှိရင် ပြန်သုံး
-        if not force:
-            ready, error, _, link = read_state()
-            if ready and link and is_alive(link):
-                s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
-                show_link(link)
-                return
-
         try:
             api = KaggleApi()
             api.authenticate()
@@ -341,9 +319,10 @@ def run(force):
             s.update(label="Kaggle စတင်နေတယ်...")
 
         fresh_after = (t_push - 10) if pushed else 0
-        ok, final_link = False, None
+        ok = False
+        final_link = None
 
-        for _ in range(600 if pushed else 60):
+        for _ in range(300):
             ready, error, start_t, link = read_state()
             fresh = start_t > 0 and start_t >= fresh_after
 
@@ -353,19 +332,14 @@ def run(force):
                 return
 
             if fresh and ready and link:
-                ok, final_link = True, link
+                ok = True
+                final_link = link
                 break
-            time.sleep(1)
+            time.sleep(2)
 
         if not ok:
             s.update(label="အချိန်ကုန်သွားတယ်", state="error")
-            if not pushed:
-                st.warning(
-                    "Kaggle မှာ script အဟောင်း run နေတုန်း ဖြစ်နိုင်တယ်။ "
-                    "Kaggle → Your Work ထဲက session ကို Stop လုပ်ပြီး 🔄 ပြန်စမယ် ကို နှိပ်ပါ။"
-                )
-            else:
-                st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
+            st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
             return
 
         s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
@@ -376,7 +350,7 @@ def run(force):
 # ==========================================
 # UI
 # ==========================================
-st.title("🔗 Kaggle Runner")
+st.title("🔗 Kaggle Runner (Gradio Share)")
 
 c1, c2 = st.columns(2)
 with c1:
