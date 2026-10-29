@@ -1,4 +1,4 @@
-import os, json, time, tempfile, re
+import os, json, time, tempfile
 import requests
 import streamlit as st
 
@@ -8,19 +8,22 @@ import streamlit as st
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "e949c9ede1ed6d03eda8811b5421a262"
 SLUG = "my-link-runner"
+
+# ⭐ ဒီနေရာမှာ CPU သက်သက် သုံးဖို့ ပိတ်ထားပါတယ်
 GPU_ENABLED = False   
-TOPIC = "kgl-k-7f3a9c2e51b84d06" # ntfy.sh အတွက် (မပြောင်းပါနဲ့)
+
+TOPIC = "kgl-k-7f3a9c2e51b84d06" 
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 from kaggle.api.kaggle_api_extended import KaggleApi
 
-st.set_page_config(page_title="Kaggle Link ထုတ်စက်", page_icon="🔗")
-st.title("🔗 Kaggle Link ထုတ်စက် (Gradio + Cloudflare)")
+st.set_page_config(page_title="Kaggle Link ထုတ်စက် (CPU)", page_icon="🔗")
+st.title("🔗 Kaggle Link ထုတ်စက် (CPU မြန်မြန်)")
 st.markdown("---")
 
 # ==========================================
-# ခင်ဗျား ပေးထားတဲ့ Kaggle Code (မူရင်းအတိုင်း)
+# Kaggle မှာ Run မယ့် Script (CPU အတွက် ပြင်ထားတယ်)
 # ==========================================
 KAGGLE_SCRIPT = r'''
 import os, re, sys, time, subprocess, threading, urllib.request
@@ -162,7 +165,7 @@ if fonts:
     os.environ["RECAP_FONT"] = os.path.abspath("MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-# ⭐ Gradio Share ပါ ထွက်အောင် လုပ်ထားတယ်
+# ⭐ Gradio Share Link ပါ ထွက်အောင် လုပ်ထားတယ်
 WRAPPER_CODE = """
 import runpy, gradio, sys
 _original_launch = gradio.Blocks.launch
@@ -221,7 +224,7 @@ while True:
 '''
 
 # ==========================================
-# Streamlit မှာ Link တွေ ဖမ်းယူဖို့ Helper
+# Streamlit Helpers
 # ==========================================
 def read_state():
     links, ready, error, start_t = {}, False, None, 0
@@ -277,12 +280,25 @@ def push_kernel(api):
         "language": "python",
         "kernel_type": "script",
         "is_private": "true",
-        "enable_gpu": "true" if GPU_ENABLED else "false",
+        "enable_gpu": "false", # ⭐ CPU သက်သက်
         "enable_internet": "true",
     }
     with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
         json.dump(meta, f)
     api.kernels_push(folder)
+
+def show_final(links):
+    st.markdown("### 🔗 ဖွင့်လို့ရတဲ့ Link တွေ")
+    
+    if "gradio" in links:
+        st.success("⭐ **Gradio Share Link** (ဖုန်းကနေ ဝင်ရင် ဒါကို သုံးပါ - Error ကင်း၊ VPN မခံ)")
+        st.code(links["gradio"])
+        st.markdown(f"[🔗 ဒီနေရာကို နှိပ်ပြီး ဖွင့်ပါ]({links['gradio']})")
+    
+    if "cloudflare" in links:
+        st.info("🌐 **Cloudflare Link** (အရန်)")
+        st.code(links["cloudflare"])
+        st.markdown(f"[🔗 ဒီနေရာကို နှိပ်ပြီး ဖွင့်ပါ]({links['cloudflare']})")
 
 def run(force):
     status, box = st.empty(), st.empty()
@@ -307,7 +323,7 @@ def run(force):
             status.error(f"Push မအောင်မြင်ပါ: {e}")
             return
         pushed, t_push = True, time.time()
-        status.info("⏳ Kaggle စတင်နေတယ်... (Link ထုတ်နေတယ်)")
+        status.info("⏳ Kaggle (CPU) စတင်နေတယ်... (Link ထုတ်နေတယ်)")
 
     fresh_after = (t_push - 10) if pushed else 0
 
@@ -335,36 +351,18 @@ def run(force):
 
     status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
 
-def show_final(links):
-    st.markdown("### 🔗 ဖွင့်လို့ရတဲ့ Link တွေ")
-    
-    if "gradio" in links:
-        st.success("⭐ **Gradio Share Link** (ဖုန်းကနေ ဝင်ရင် ဒါကို သုံးပါ - Error ကင်း၊ VPN မခံ)")
-        st.code(links["gradio"])
-        st.markdown(f"[🔗 ဒီနေရာကို နှိပ်ပြီး ဖွင့်ပါ]({links['gradio']})")
-    
-    if "cloudflare" in links:
-        st.info("🌐 **Cloudflare Link** (အရန်)")
-        st.code(links["cloudflare"])
-        st.markdown(f"[🔗 ဒီနေရာကို နှိပ်ပြီး ဖွင့်ပါ]({links['cloudflare']})")
-    
-    if not links:
-        st.warning("Link မရသေးပါ။ ခဏစောင့်ပြီး ပြန်စမ်းပါ။")
-
-
 # ==========================================
 # Streamlit UI 
 # ==========================================
 with st.sidebar:
     st.header("⚙️ လမ်းညွှန်")
     st.markdown("""
-    1. **Link ယူမယ်** ကို နှိပ်ပါ။
-    2. ခဏစောင့်ပါ (၂-၃ မိနစ်)။
-    3. **⭐ Gradio Link** ကို ဖုန်းကနေ ဖွင့်ပါ။
-    4. VPN ဖွင့်ထားရင် ပိတ်ပြီး စမ်းပါ။
+    - **CPU သက်သက်** ဖြစ်လို့ တန်းစီစောင့်ရတာ မရှိပါဘူး။
+    - **Link ယူမယ်** ကို နှိပ်ပြီး ၁-၃ မိနစ် စောင့်ပါ။
+    - ရလာတဲ့ **⭐ Gradio Link** ကို ဖုန်းကနေ ဖွင့်ပါ။
     """)
 
-st.info("💡 ဒီစနစ်က **Gradio Share Link** နဲ့ **Cloudflare Link** နှစ်ခုလုံးကို ထုတ်ပေးပါတယ်။ ဖုန်းကနေဝင်ရင် Gradio Link က ပိုပြီး Error ကင်းပါတယ်။")
+st.info("💡 ဒီစနစ်က CPU ကို သုံးထားလို့ Kaggle တန်းစီစောင့်ရတာ မရှိဘဲ မြန်မြန် Link ထွက်ပါလိမ့်မယ်။")
 
 col1, col2 = st.columns(2)
 with col1:
