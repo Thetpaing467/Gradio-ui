@@ -9,7 +9,8 @@ st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centere
 # ==========================================
 
 KAGGLE_USERNAME = "thetuaiaa"
-KAGGLE_KEY = "kgl-k-7f3a9c2e51b84d06"
+# Token အသစ်ကို ဒီနေရာမှာ အစားထိုး ထည့်သွင်းထားပါတယ်
+KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c" 
 CF_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
 
 DOMAIN_URL = "https://tpokemb.dpdns.org"
