@@ -27,11 +27,11 @@ from importlib import metadata
 import requests
 
 # ==========================================
-# ⭐ CPU-ONLY ENV (GPU မသုံးရင် ဒါတွေ မဖြစ်မနေ ထည့်ပါ)
+# ⭐ CPU-ONLY ENV
 # ==========================================
-os.environ["CUDA_VISIBLE_DEVICES"] = ""          # GPU မမြင်အောင် ပိတ်
-os.environ["CT2_FORCE_CPU"] = "1"                # faster-whisper → CPU
-os.environ["OMP_NUM_THREADS"] = "4"              # Kaggle CPU = 4 vCPU
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["CT2_FORCE_CPU"] = "1"
+os.environ["OMP_NUM_THREADS"] = "4"
 os.environ["MKL_NUM_THREADS"] = "4"
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
@@ -174,17 +174,16 @@ GRADIO_LINK_PATTERN = re.compile(r"https://[a-zA-Z0-9\-]+\.gradio\.live")
 found_link = False
 ready = False
 
-for _ in range(360):
+# ⭐ FIX: link ရော app ready ရော နှစ်ခုလုံးရမှ break
+for _ in range(1200):
     if app_proc.poll() is not None:
         print(f"❌ App crash (exit {app_proc.returncode}) — log:\n")
         print(tail_log())
         post("error", "App crash: " + tail_log(400))
         break
 
-    log_content = tail_log(5000)
-
     if not found_link:
-        m = GRADIO_LINK_PATTERN.search(log_content)
+        m = GRADIO_LINK_PATTERN.search(tail_log(8000))
         if m:
             found_link = True
             link = m.group(0)
@@ -196,18 +195,20 @@ for _ in range(360):
             urllib.request.urlopen(f"http://127.0.0.1:{PORT}", timeout=1)
             ready = True
             say("app ✅")
-            post("ready", "1")
-            break
         except Exception:
             pass
 
+    if ready and found_link:
+        post("ready", "1")
+        break
+
     time.sleep(0.5)
 
-if not ready:
-    print("⚠️ App မတက်သေးဘူး — log:\n")
+if not (ready and found_link):
+    print("⚠️ App/Link မရသေးဘူး — log:\n")
     print(tail_log())
-    post("error", "App မတက်ပါ: " + tail_log(400))
-    raise SystemExit("App မတက်လို့ ရပ်လိုက်တယ်။")
+    post("error", "App/Share link မရပါ: " + tail_log(400))
+    raise SystemExit("ရပ်လိုက်တယ်။")
 
 print(f"Running... log: {LOG}")
 while True:
@@ -275,7 +276,7 @@ def push_kernel(api):
         "language": "python",
         "kernel_type": "script",
         "is_private": "true",
-        "enable_gpu": "false",       # ✅ CPU only — တိုက်ရိုက် သတ်မှတ်
+        "enable_gpu": "false",       # ✅ CPU only
         "enable_internet": "true",
     }
     with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
