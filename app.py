@@ -1,23 +1,34 @@
-import os, json, time, tempfile, re
+import os
+import sys
+import json
+import time
+import tempfile
+import re
+import shutil
+import subprocess
+import threading
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centered")
+from importlib import metadata
+
+st.set_page_config(
+    page_title="Kaggle Runner",
+    page_icon="🔗",
+    layout="centered",
+)
 
 # ==========================================
-# Settings
+# CONFIG — မင်းရဲ့ Key များ တိုက်ရိုက်ထည့်ထားပါတယ်
 # ==========================================
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c" 
-
-SLUG = "my-link-runner"
-GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
 # Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ (နောက်ကွယ်မှာ)
 os.system("pip install -U kaggle -q")
 
-# Token အသစ်အတွက် kaggle.json ဖန်တီးပါ
+# Token အသစ်အတွက် kaggle.json ဖန်တီးပါ (401 Error မတက်အောင်)
 kaggle_cred = {"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}
 os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
 with open(os.path.expanduser("~/.kaggle/kaggle.json"), "w") as f:
@@ -28,72 +39,111 @@ os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 os.environ["KAGGLE_API_TOKEN"] = KAGGLE_KEY
 
-st.markdown(
-    """
-    <style>
-    #MainMenu, footer, header {visibility: hidden;}
-    .block-container {max-width: 520px; padding-top: 3rem;}
-    .stButton > button, .stLinkButton > a {
-        height: 3.2rem; border-radius: 12px; font-weight: 600;
-    }
-    h1 {text-align: center; font-size: 1.7rem !important; margin-bottom: 1.5rem;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+SLUG = "my-link-runner"
+GPU_ENABLED = False
+LINK_TIMEOUT = 240
 
 # ==========================================
-# Kaggle မှာ Run မယ့် Script (Gradio Share)
+# UI
+# ==========================================
+st.markdown("""
+<style>
+#MainMenu, footer, header {visibility:hidden;}
+.block-container {max-width:520px;padding-top:3rem;}
+.stButton>button,.stLinkButton>a {
+    height:3.2rem;border-radius:12px;font-weight:600;
+}
+h1 {text-align:center;font-size:1.7rem!important;}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🔗 Kaggle Runner")
+st.caption("Fast Gradio Share Launcher")
+
+# ==========================================
+# KAGGLE SCRIPT
 # ==========================================
 KAGGLE_SCRIPT = r'''
-import os, sys, time, subprocess, threading, re
+import os, sys, time, re, json, shutil, subprocess
+import threading
 from importlib import metadata
 import requests
 
-NTFY_TOPIC = "__TOPIC__"
+NTFY_TOPIC = __TOPIC__
 REPO_URL = "https://github.com/Thetpaing467/new.git"
 REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
 PORT = 7860
 LOG = "/kaggle/working/app.log"
-T0 = time.time()
+T0 = time.monotonic()
 
 def say(msg):
-    print(f"[{time.time() - T0:5.1f}s] {msg}", flush=True)
+    print(f"[{time.monotonic()-T0:6.1f}s] {msg}", flush=True)
 
-def sh(cmd):
-    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-    return p.returncode, (p.stdout + p.stderr)
-
-def read(path, n=5000):
+def sh(cmd, timeout=600):
     try:
-        return open(path, encoding="utf-8", errors="ignore").read()[-n:]
+        p = subprocess.run(
+            cmd, shell=True, text=True,
+            capture_output=True, timeout=timeout
+        )
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except Exception as e:
+        return 1, str(e)
+
+def read_log(n=8000):
+    try:
+        with open(LOG, "r", encoding="utf-8", errors="ignore") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size-n))
+            return f.read()
     except Exception:
         return ""
 
-def post(kind, text):
+def post(kind, message):
     try:
-        requests.post(f"https://ntfy.sh/{NTFY_TOPIC}",
-                      data=f"{kind}|{text}".encode("utf-8"), timeout=15)
+        r = requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=f"{kind}|{message}".encode("utf-8"),
+            timeout=8,
+        )
+        r.raise_for_status()
     except Exception as e:
-        print("ntfy error:", e)
+        say("ntfy error: " + str(e))
 
-post("start", "1")
+# Stop previous app
+post("start", str(int(time.time())))
+sh("pkill -f '[p]ython.*_gradio_share_wrapper.py'")
 sh("pkill -f '[p]ython.*app.py'")
-time.sleep(0.3)
+time.sleep(0.2)
 
 RES = {}
 
+# ==========================================
+# Git
+# ==========================================
 def task_git():
-    if os.path.exists(REPO_DIR):
-        rc, out = sh(f"cd {REPO_DIR} && git fetch -q origin && git reset -q --hard origin/HEAD")
+    if os.path.isdir(os.path.join(REPO_DIR, ".git")):
+        rc, out = sh(f"git -C {REPO_DIR} fetch -q origin")
+        if rc == 0:
+            rc, out = sh(
+                f"git -C {REPO_DIR} reset -q --hard origin/HEAD"
+            )
     else:
-        rc, out = sh(f"git clone -q --depth 1 {REPO_URL} {REPO_DIR}")
-    RES["git"] = (rc, out)
-    say("git ✅" if rc == 0 else f"git ❌ {out[-300:]}")
+        if os.path.exists(REPO_DIR):
+            shutil.rmtree(REPO_DIR)
+        rc, out = sh(
+            f"git clone -q --depth 1 {REPO_URL} {REPO_DIR}"
+        )
 
+    RES["git"] = (rc, out)
+    say("git ready" if rc == 0 else "git failed: " + out[-500:])
+
+# ==========================================
+# Python dependencies
+# ==========================================
 def task_pip():
-    need = {
+    required = {
         "gradio": "gradio>=5,<6",
         "faster-whisper": "faster-whisper",
         "edge-tts": "edge-tts",
@@ -105,260 +155,418 @@ def task_pip():
         "requests": "requests",
         "numpy": "numpy",
     }
+
     missing = []
-    for dist, spec in need.items():
+
+    for dist, spec in required.items():
         try:
-            v = metadata.version(dist)
-            if dist == "gradio" and not v.startswith("5."):
+            version = metadata.version(dist)
+            if dist == "gradio" and not version.startswith("5."):
                 missing.append(spec)
         except metadata.PackageNotFoundError:
             missing.append(spec)
-    if missing:
-        say(f"pip install: {', '.join(missing)}")
-        quoted = " ".join(f"'{m}'" for m in missing)
-        rc, out = sh(f"{sys.executable} -m pip install -q {quoted}")
-        if rc != 0:
-            say(f"pip ❌ {out[-500:]}")
-    RES["pip"] = True
-    say("pip ✅")
 
+    if not missing:
+        RES["pip"] = True
+        say("pip ready — already installed")
+        return
+
+    say("Installing missing packages: " + ", ".join(missing))
+
+    try:
+        p = subprocess.run(
+            [
+                sys.executable, "-m", "pip", "install",
+                "--disable-pip-version-check", "-q", *missing
+            ],
+            capture_output=True, text=True, timeout=900
+        )
+        RES["pip"] = p.returncode == 0
+        say(
+            "pip ready" if p.returncode == 0
+            else "pip failed: " + (p.stderr or p.stdout)[-800:]
+        )
+    except Exception as e:
+        RES["pip"] = False
+        say("pip error: " + str(e))
+
+# ==========================================
+# System dependencies
+# ==========================================
 def task_apt():
-    need = ["ffmpeg", "libraqm0", "libfribidi0", "fonts-noto-core", "fonts-noto-cjk",
-            "fonts-dejavu-core", "fonts-sil-padauk"]
-    missing = [p for p in need if sh(f"dpkg -s {p}")[0] != 0]
-    if missing:
-        say(f"apt install: {', '.join(missing)}")
-        cmd = ("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-               f"--no-install-recommends {' '.join(missing)}")
-        rc, _ = sh(cmd)
-        if rc != 0:
-            sh("apt-get update -qq")
-            sh(cmd)
-    RES["apt"] = True
-    say("apt ✅")
+    packages = [
+        "ffmpeg", "libraqm0", "libfribidi0",
+        "fonts-noto-core", "fonts-noto-cjk",
+        "fonts-dejavu-core", "fonts-sil-padauk"
+    ]
 
-threads = [threading.Thread(target=f) for f in (task_git, task_pip, task_apt)]
-for t in threads:
+    missing = []
+    for package in packages:
+        rc, out = sh(
+            f"dpkg-query -W -f='${{Status}}' {package}"
+        )
+        if rc != 0 or "install ok installed" not in out:
+            missing.append(package)
+
+    if not missing:
+        RES["apt"] = True
+        say("apt ready — already installed")
+        return
+
+    cmd = (
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+        "--no-install-recommends " + " ".join(missing)
+    )
+    rc, out = sh(cmd)
+
+    if rc != 0:
+        sh("apt-get update -qq")
+        rc, out = sh(cmd)
+
+    RES["apt"] = rc == 0
+    say("apt ready" if rc == 0 else "apt failed: " + out[-500:])
+
+# Start preparation tasks concurrently
+tasks = [
+    threading.Thread(target=task_git),
+    threading.Thread(target=task_pip),
+    threading.Thread(target=task_apt),
+]
+
+for t in tasks:
     t.start()
-threads[0].join()
-threads[1].join()
+for t in tasks:
+    t.join()
 
-if RES.get("git", (1,))[0] != 0:
-    post("error", "git clone/update မအောင်မြင်ပါ: " + RES["git"][1][-300:])
-    raise SystemExit("git မအောင်မြင်ပါ")
+if RES.get("git", (1, ""))[0] != 0:
+    post("error", "Git failed: " + RES["git"][1][-300:])
+    raise SystemExit("Git clone/update failed")
 
+if not RES.get("pip", False):
+    post("error", "Python package installation failed")
+    raise SystemExit("pip installation failed")
+
+if not RES.get("apt", False):
+    say("WARNING: Some system packages failed")
+
+# ==========================================
+# App configuration
+# ==========================================
 os.chdir(REPO_DIR)
-if not os.path.exists(APP_FILE):
+
+if not os.path.isfile(APP_FILE):
     post("error", "app.py repo ထဲမှာ မရှိပါ")
-    raise SystemExit("app.py မရှိပါ")
+    raise SystemExit("app.py not found")
 
-fonts = [f for f in os.listdir(".") if f.lower().endswith((".ttf", ".otf", ".ttc"))]
+fonts = [
+    f for f in os.listdir(".")
+    if f.lower().endswith((".ttf", ".otf", ".ttc"))
+]
 if fonts:
+    preferred = "MyanmarPadaung.ttf"
     os.environ["RECAP_FONT"] = os.path.abspath(
-        "MyanmarPadaung.ttf" if "MyanmarPadaung.ttf" in fonts else sorted(fonts)[0])
-os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
+        preferred if preferred in fonts else sorted(fonts)[0]
+    )
 
-# ဒီနေရာမှာ Share=True ဖြစ်အောင် ပြင်ထားပါတယ် (မြန်မြန်ထွက်အောင် ချိန်ညှိထားပါတယ်)
-WRAPPER = """
-import runpy, gradio, sys
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+# ==========================================
+# Gradio wrapper
+# ==========================================
+WRAPPER = r"""
+import sys, runpy, gradio
 
 _original_launch = gradio.Blocks.launch
-def _patched_launch(self, *args, **kwargs):
-    kwargs['share'] = True 
-    kwargs['server_name'] = '0.0.0.0'
-    kwargs['server_port'] = 7860
-    return _original_launch(self, *args, **kwargs)
-gradio.Blocks.launch = _patched_launch
 
+def _patched_launch(self, *args, **kwargs):
+    kwargs["share"] = True
+    kwargs["server_name"] = "0.0.0.0"
+    kwargs["server_port"] = 7860
+    kwargs["show_error"] = True
+    return _original_launch(self, *args, **kwargs)
+
+gradio.Blocks.launch = _patched_launch
 sys.argv = ["app.py"]
 runpy.run_path("app.py", run_name="__main__")
 """
-with open("_gradio_share_wrapper.py", "w") as f:
+
+with open("_gradio_share_wrapper.py", "w", encoding="utf-8") as f:
     f.write(WRAPPER)
 
-env = dict(os.environ, PORT=str(PORT))
-app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
-                            stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
-say("app စတင်နေတယ်...")
+# ==========================================
+# Launch and detect URL
+# ==========================================
+say("Starting Gradio...")
 
-# Gradio Share Link ကို Log ထဲကနေ ရှာမယ် (ပိုမြန်အောင် ချိန်ညှိထားပါတယ်)
+log_file = open(LOG, "w", encoding="utf-8")
+env = os.environ.copy()
+env["PORT"] = str(PORT)
+
+app_proc = subprocess.Popen(
+    [sys.executable, "-u", "_gradio_share_wrapper.py"],
+    stdout=log_file,
+    stderr=subprocess.STDOUT,
+    env=env,
+)
+
 share_url = None
-for _ in range(600):
-    if app_proc.poll() is not None:
-        print(f"❌ App crash (exit {app_proc.returncode})")
-        print(read(LOG))
-        post("error", "App crash: " + read(LOG, 400))
-        break
+deadline = time.monotonic() + 240
+log_pos = 0
+log_buffer = ""
 
-    log_content = read(LOG, 10000)
-    match = re.search(r'(https://[a-zA-Z0-9\-]+\.gradio\.live)', log_content)
-    
-    if match:
-        share_url = match.group(1)
-        break
-
-    time.sleep(0.5)
-
-if share_url:
-    post("cloudflare", share_url)  # ntfy မှာ link ပို့မယ်
-    post("ready", "1")
-    say(f"ready ✅ {share_url}")
-    print(f"Running... link: {share_url}")
-    
-    while True:
-        time.sleep(30)
+try:
+    while time.monotonic() < deadline:
         if app_proc.poll() is not None:
-            print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode})")
-            print(read(LOG))
+            log_file.flush()
+            output = read_log()
+            print(output, flush=True)
+            post("error", "App crashed: " + output[-300:])
             break
-else:
-    print("⚠️ Share Link မထွက်လာပါ — log:\n")
-    print(read(LOG))
-    post("error", "Share Link မထွက်လာပါ: " + read(LOG, 200))
-    raise SystemExit("ရပ်လိုက်တယ်။")
+
+        try:
+            log_file.flush()
+            with open(LOG, "r", encoding="utf-8", errors="ignore") as f:
+                f.seek(log_pos)
+                chunk = f.read()
+                log_pos = f.tell()
+
+            if chunk:
+                log_buffer = (log_buffer + chunk)[-20000:]
+                match = re.search(
+                    r"https://[a-zA-Z0-9-]+\.gradio\.live",
+                    log_buffer
+                )
+                if match:
+                    share_url = match.group(0)
+                    break
+        except (OSError, ValueError) as e:
+            say("Log read error: " + str(e))
+
+        time.sleep(0.25)
+
+    if share_url:
+        say("Gradio URL ready")
+        post("cloudflare", share_url)
+        post("ready", "1")
+        print("GRADIO_SHARE_URL=" + share_url, flush=True)
+
+        while app_proc.poll() is None:
+            time.sleep(5)
+
+        say("App stopped: " + str(app_proc.returncode))
+        print(read_log(), flush=True)
+
+    else:
+        output = read_log()
+        print("Share URL timeout/crash", flush=True)
+        print(output, flush=True)
+        post("error", "Share URL timeout: " + output[-300:])
+
+        if app_proc.poll() is None:
+            app_proc.terminate()
+            try:
+                app_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                app_proc.kill()
+
+        raise SystemExit("Gradio URL was not detected")
+
+finally:
+    if app_proc.poll() is None:
+        app_proc.terminate()
+    log_file.close()
 '''
 
 # ==========================================
-# Helpers
+# KAGGLE / NTFY
 # ==========================================
-def read_state():
-    ready, error, start_t, link = False, None, 0, None
+def read_state(since_time=0):
+    ready, error, link = False, None, None
+
     try:
-        r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
-        for line in r.text.strip().splitlines():
+        params = {"poll": "1"}
+        if since_time:
+            params["since"] = str(max(0, int(since_time)))
+
+        r = requests.get(
+            f"https://ntfy.sh/{TOPIC}/json",
+            params=params,
+            timeout=8,
+        )
+        r.raise_for_status()
+
+        for line in r.text.splitlines():
             try:
                 d = json.loads(line)
-            except Exception:
+            except (ValueError, TypeError):
                 continue
+
             if d.get("event") != "message":
                 continue
+
             msg = d.get("message", "")
             if "|" not in msg:
                 continue
-            kind, val = msg.split("|", 1)
+
+            kind, value = msg.split("|", 1)
+
             if kind == "start":
-                ready, error, start_t, link = False, None, d.get("time", 0), None
-            elif kind == "cloudflare": # အခုဒီမှာ gradio link ကို လာထည့်ပါမယ်
-                link = val
+                ready, error, link = False, None, None
+            elif kind == "cloudflare":
+                link = value
             elif kind == "ready":
                 ready = True
             elif kind == "error":
-                error = val
+                error = value
+
     except Exception:
         pass
-    return ready, error, start_t, link
+
+    return ready, error, link
 
 
 def kernel_busy(api):
     try:
-        res = api.kernels_status(f"{KAGGLE_USERNAME}/{SLUG}")
-        s = str(getattr(res, "status", res)).lower()
-        return "running" in s or "queued" in s
+        result = api.kernels_status(f"{KAGGLE_USERNAME}/{SLUG}")
+        status = str(getattr(result, "status", result)).lower()
+        return "running" in status or "queued" in status
     except Exception:
         return False
 
 
 def push_kernel(api):
-    code = (KAGGLE_SCRIPT
-            .replace("__TOPIC__", TOPIC))
-    folder = tempfile.mkdtemp()
-    with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
-        f.write(code)
-    meta = {
-        "id": f"{KAGGLE_USERNAME}/{SLUG}",
-        "title": SLUG,
-        "code_file": "script.py",
-        "language": "python",
-        "kernel_type": "script",
-        "is_private": "true",
-        "enable_gpu": "true" if GPU_ENABLED else "false",
-        "enable_internet": "true",
-    }
-    with open(os.path.join(folder, "kernel-metadata.json"), "w") as f:
-        json.dump(meta, f)
-    api.kernels_push(folder)
+    code = KAGGLE_SCRIPT.replace("__TOPIC__", json.dumps(TOPIC))
+    folder = tempfile.mkdtemp(prefix="kaggle_runner_")
+
+    try:
+        with open(
+            os.path.join(folder, "script.py"), "w", encoding="utf-8"
+        ) as f:
+            f.write(code)
+
+        meta = {
+            "id": f"{KAGGLE_USERNAME}/{SLUG}",
+            "title": SLUG,
+            "code_file": "script.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": "true",
+            "enable_gpu": "true" if GPU_ENABLED else "false",
+            "enable_internet": "true",
+        }
+
+        with open(
+            os.path.join(folder, "kernel-metadata.json"), "w"
+        ) as f:
+            json.dump(meta, f)
+
+        api.kernels_push(folder)
+
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def show_link(url):
+    st.success("Gradio Link အဆင်သင့်ဖြစ်ပြီ")
     st.link_button("🔗 ဖွင့်မယ်", url, use_container_width=True)
     st.code(url, language=None)
 
 
-def run(force):
-    missing = [n for n, v in (("KAGGLE_KEY", KAGGLE_KEY),) if not v]
-    if missing:
-        st.error("Secrets ထဲမှာ ထည့်ပါ: " + ", ".join(missing))
-        return
-
+def run(force=False):
     try:
         from kaggle.api.kaggle_api_extended import KaggleApi
     except Exception as e:
         st.error(f"Kaggle package error: {e}")
         return
 
-    with st.status("စစ်ဆေးနေတယ်...", expanded=False) as s:
-        try:
-            api = KaggleApi()
-            api.authenticate()
-        except Exception as e:
-            s.update(label="Kaggle login မရပါ", state="error")
-            st.error(str(e))
+    progress = st.progress(0)
+    status = st.empty()
+
+    try:
+        status.info("Kaggle login စစ်ဆေးနေတယ်...")
+        api = KaggleApi()
+        api.authenticate()
+        progress.progress(5)
+
+        if kernel_busy(api) and not force:
+            status.info("Kaggle kernel run နေပြီးသားဖြစ်လို့ Link စစ်နေတယ်...")
+            ready, error, link = read_state()
+
+            if ready and link:
+                progress.progress(100)
+                status.success("Link ရပါပြီ")
+                show_link(link)
+            elif error:
+                status.error(error)
+            else:
+                status.warning(
+                    "Kernel run နေပါတယ်။ Link မရသေးရင် "
+                    "Kaggle Logs ကိုစစ်ပါ၊ သို့မဟုတ် ပြန်စမယ်ကိုနှိပ်ပါ။"
+                )
             return
 
-        pushed, t_push = False, 0
-        if not force and kernel_busy(api):
-            s.update(label="Kaggle စတင်နေတုန်း... စောင့်နေတယ်")
-        else:
-            try:
-                push_kernel(api)
-            except Exception as e:
-                s.update(label="Push မအောင်မြင်ပါ", state="error")
-                st.error(str(e))
-                return
-            pushed, t_push = True, time.time()
-            s.update(label="Kaggle စတင်နေတယ်...")
+        # Publish start marker before pushing the new run
+        started_at = int(time.time())
+        requests.post(
+            f"https://ntfy.sh/{TOPIC}",
+            data=f"start|{started_at}".encode(),
+            timeout=8,
+        )
 
-        fresh_after = (t_push - 10) if pushed else 0
-        ok = False
-        final_link = None
+        status.info("Kaggle kernel push လုပ်နေတယ်...")
+        progress.progress(10)
+        push_kernel(api)
 
-        for _ in range(300):
-            ready, error, start_t, link = read_state()
-            fresh = start_t > 0 and start_t >= fresh_after
+        status.info("Gradio Link စောင့်နေတယ်...")
+        deadline = time.monotonic() + LINK_TIMEOUT
 
-            if fresh and error:
-                s.update(label="Error ဖြစ်သွားတယ်", state="error")
+        while time.monotonic() < deadline:
+            ready, error, link = read_state(since_time=started_at)
+
+            if error:
+                status.error("Kaggle app error")
                 st.error(error)
                 return
 
-            if fresh and ready and link:
-                ok = True
-                final_link = link
-                break
-            time.sleep(2)
+            if ready and link:
+                progress.progress(100)
+                status.success("အဆင်သင့်ဖြစ်ပြီ")
+                show_link(link)
+                return
 
-        if not ok:
-            s.update(label="အချိန်ကုန်သွားတယ်", state="error")
-            st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
-            return
+            time.sleep(1)
 
-        s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+        status.error("Link စောင့်ဆိုင်းချိန်ကုန်သွားပြီ")
+        st.warning(
+            "Kaggle → Code → my-link-runner → Logs ကိုစစ်ပါ။ "
+            "Share URL မထွက်ရင် app.log ထဲက error ကိုကြည့်ပါ။"
+        )
 
-    show_link(final_link)
+    except Exception as e:
+        status.error("Run မအောင်မြင်ပါ")
+        st.exception(e)
 
 
 # ==========================================
-# UI
+# BUTTONS
 # ==========================================
-st.title("🔗 Kaggle Runner (Gradio Share)")
-
 c1, c2 = st.columns(2)
+
 with c1:
-    start = st.button("🚀 စတင်မယ်", use_container_width=True, type="primary")
+    start = st.button(
+        "🚀 စတင်မယ်",
+        type="primary",
+        use_container_width=True,
+    )
+
 with c2:
-    restart = st.button("🔄 ပြန်စမယ်", use_container_width=True)
+    restart = st.button(
+        "🔄 ပြန်စမယ်",
+        use_container_width=True,
+    )
 
 if start:
-    run(False)
+    run(force=False)
 elif restart:
-    run(True)
+    run(force=True)
