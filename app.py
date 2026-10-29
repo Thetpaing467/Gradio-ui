@@ -1,4 +1,4 @@
-import os, json, time, tempfile, subprocess, sys
+import os, json, time, tempfile
 import requests
 import streamlit as st
 
@@ -7,27 +7,33 @@ st.set_page_config(page_title="Kaggle Runner", page_icon="🔗", layout="centere
 # ==========================================
 # Settings
 # ==========================================
-KAGGLE_USERNAME = "thetuaiaa"
-KAGGLE_KEY = "KGAT_c6aa2589e8c5ab869007668719aee16c" 
-CF_TOKEN = "eyJhIjoiYTQ1N2IxODU1Y2FlMzYwNGQ3NGVlYzY0YjJkNmIxNjgiLCJ0IjoiN2UxYjFkZTAtMTIyYy00YWYzLWFlMGItM2VhMTU2ZGI3NzI5IiwicyI6Ik5tTTFOakJsT1dZdE0yVXhZaTAwWWpFeUxUazVNVFl0TXpFd04yRTBaR1ZqWTJNMCJ9"
+# Secrets ကို .streamlit/secrets.toml (ဒါမှမဟုတ် Streamlit Cloud Secrets) ထဲမှာ ထည့်ပါ
+#   KAGGLE_USERNAME = "thetuaiaa"
+#   KAGGLE_KEY = "your-new-key"
+def _secret(name, default=""):
+    try:
+        return st.secrets[name]
+    except Exception:
+        return os.environ.get(name, default)
 
-DOMAIN_URL = "https://tpokemb.dpdns.org"
+KAGGLE_USERNAME = _secret("KAGGLE_USERNAME", "thetuaiaa")
+KAGGLE_KEY = _secret("KAGGLE_KEY")
+
 SLUG = "my-link-runner"
 GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
 # ==========================================
-# Kaggle Setup (File ဖန်တီးခြင်း)
+# Kaggle Setup
 # ==========================================
-# Kaggle Library ကို အသစ်ဆုံး Version တင်ပါ
 os.system("pip install -U kaggle -q")
 
-# Token အသစ်အတွက် kaggle.json ဖန်တီးပါ
-kaggle_cred = {"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}
-os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
-with open(os.path.expanduser("~/.kaggle/kaggle.json"), "w") as f:
-    json.dump(kaggle_cred, f)
-os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 0o600)
+if KAGGLE_KEY:
+    os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
+    cred_path = os.path.expanduser("~/.kaggle/kaggle.json")
+    with open(cred_path, "w") as f:
+        json.dump({"username": KAGGLE_USERNAME, "key": KAGGLE_KEY}, f)
+    os.chmod(cred_path, 0o600)
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
@@ -61,10 +67,6 @@ REPO_DIR = "/kaggle/working/new"
 APP_FILE = "app.py"
 PORT = 7860
 LOG = "/kaggle/working/app.log"
-CF_LOG = "/kaggle/working/cf.log"
-CF_BIN = "/kaggle/working/cloudflared"
-CF_TOKEN = "__CFTOKEN__"
-DOMAIN_URL = "__URL__"
 T0 = time.time()
 
 def say(msg):
@@ -89,7 +91,6 @@ def post(kind, text):
 
 post("start", "1")
 sh("pkill -f '[p]ython.*app.py'")
-sh("pkill -f '[c]loudflared'")
 time.sleep(0.3)
 
 RES = {}
@@ -147,29 +148,15 @@ def task_apt():
     RES["apt"] = True
     say("apt ✅")
 
-def task_cf():
-    if os.path.exists(CF_BIN) and os.path.getsize(CF_BIN) > 1000000:
-        RES["cf"] = True
-        return
-    rc, out = sh("curl -sL -o " + CF_BIN +
-                 " https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
-                 " && chmod +x " + CF_BIN)
-    RES["cf"] = (rc == 0)
-    say("cloudflared ✅" if rc == 0 else f"cloudflared ❌ {out[-300:]}")
-
-threads = [threading.Thread(target=f) for f in (task_git, task_pip, task_apt, task_cf)]
+threads = [threading.Thread(target=f) for f in (task_git, task_pip, task_apt)]
 for t in threads:
     t.start()
 threads[0].join()
 threads[1].join()
-threads[3].join()
 
 if RES.get("git", (1,))[0] != 0:
     post("error", "git clone/update မအောင်မြင်ပါ: " + RES["git"][1][-300:])
     raise SystemExit("git မအောင်မြင်ပါ")
-if not RES.get("cf"):
-    post("error", "cloudflared download မအောင်မြင်ပါ")
-    raise SystemExit("cloudflared မအောင်မြင်ပါ")
 
 os.chdir(REPO_DIR)
 if not os.path.exists(APP_FILE):
@@ -187,7 +174,7 @@ import runpy, gradio, sys
 
 _original_launch = gradio.Blocks.launch
 def _patched_launch(self, *args, **kwargs):
-    kwargs['share'] = False
+    kwargs['share'] = True
     kwargs['server_name'] = '0.0.0.0'
     kwargs['server_port'] = 7860
     return _original_launch(self, *args, **kwargs)
@@ -204,54 +191,27 @@ app_proc = subprocess.Popen([sys.executable, "-u", "_gradio_share_wrapper.py"],
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT, env=env)
 say("app စတင်နေတယ်...")
 
-cf_proc = subprocess.Popen([CF_BIN, "tunnel", "--no-autoupdate", "--protocol", "http2",
-                            "run", "--token", CF_TOKEN],
-                           stdout=open(CF_LOG, "w"), stderr=subprocess.STDOUT)
-say("cloudflared စတင်နေတယ်...")
-
-app_ok = False
-cf_ok = False
-ready = False
-
+link = None
 for _ in range(1200):
     if app_proc.poll() is not None:
         print(f"❌ App crash (exit {app_proc.returncode})")
         print(read(LOG))
         post("error", "App crash: " + read(LOG, 400))
+        raise SystemExit("App crash")
+    m = re.search(r"https://[a-zA-Z0-9\-]+\.gradio\.live", read(LOG, 20000))
+    if m:
+        link = m.group(0)
         break
-    if cf_proc.poll() is not None:
-        print("❌ cloudflared ရပ်သွားတယ်")
-        print(read(CF_LOG))
-        post("error", "Tunnel error: " + read(CF_LOG, 400))
-        break
-
-    if not app_ok:
-        try:
-            app_ok = requests.get(f"http://127.0.0.1:{PORT}", timeout=2).status_code == 200
-            if app_ok:
-                say("app ✅")
-        except Exception:
-            pass
-
-    if not cf_ok and "Registered tunnel connection" in read(CF_LOG, 20000):
-        cf_ok = True
-        say("tunnel ✅")
-
-    if app_ok and cf_ok:
-        post("cloudflare", DOMAIN_URL)
-        post("ready", "1")
-        ready = True
-        say(f"ready ✅ {DOMAIN_URL}")
-        break
-
     time.sleep(0.5)
 
-if not ready:
-    print("⚠️ မအောင်မြင်ပါ — log:\n")
+if not link:
     print(read(LOG))
-    print(read(CF_LOG))
-    post("error", "Start မအောင်မြင်ပါ: " + read(LOG, 200) + read(CF_LOG, 200))
-    raise SystemExit("ရပ်လိုက်တယ်။")
+    post("error", "Gradio link မရပါ: " + read(LOG, 300))
+    raise SystemExit("link မရပါ")
+
+post("link", link)
+post("ready", "1")
+say(f"ready ✅ {link}")
 
 print(f"Running... log: {LOG}")
 while True:
@@ -260,17 +220,13 @@ while True:
         print(f"❌ App ရပ်သွားပြီ (exit {app_proc.returncode}) — log:\n")
         print(read(LOG))
         break
-    if cf_proc.poll() is not None:
-        print("❌ cloudflared ရပ်သွားပြီ — log:\n")
-        print(read(CF_LOG))
-        break
 '''
 
 # ==========================================
 # Helpers
 # ==========================================
 def read_state():
-    ready, error, start_t = False, None, 0
+    ready, error, start_t, link = False, None, 0, None
     try:
         r = requests.get(f"https://ntfy.sh/{TOPIC}/json?poll=1&since=all", timeout=10)
         for line in r.text.strip().splitlines():
@@ -285,14 +241,16 @@ def read_state():
                 continue
             kind, val = msg.split("|", 1)
             if kind == "start":
-                ready, error, start_t = False, None, d.get("time", 0)
+                ready, error, link, start_t = False, None, None, d.get("time", 0)
+            elif kind == "link":
+                link = val
             elif kind == "ready":
                 ready = True
             elif kind == "error":
                 error = val
     except Exception:
         pass
-    return ready, error, start_t
+    return ready, error, start_t, link
 
 
 def is_alive(url):
@@ -313,10 +271,7 @@ def kernel_busy(api):
 
 
 def push_kernel(api):
-    code = (KAGGLE_SCRIPT
-            .replace("__TOPIC__", TOPIC)
-            .replace("__CFTOKEN__", CF_TOKEN)
-            .replace("__URL__", DOMAIN_URL))
+    code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
     folder = tempfile.mkdtemp()
     with open(os.path.join(folder, "script.py"), "w", encoding="utf-8") as f:
         f.write(code)
@@ -335,15 +290,14 @@ def push_kernel(api):
     api.kernels_push(folder)
 
 
-def show_link():
-    st.link_button("🔗 ဖွင့်မယ်", DOMAIN_URL, use_container_width=True)
-    st.code(DOMAIN_URL, language=None)
+def show_link(link):
+    st.link_button("🔗 ဖွင့်မယ်", link, use_container_width=True)
+    st.code(link, language=None)
 
 
 def run(force):
-    missing = [n for n, v in (("KAGGLE_KEY", KAGGLE_KEY), ("CF_TUNNEL_TOKEN", CF_TOKEN)) if not v]
-    if missing:
-        st.error("Secrets ထဲမှာ ထည့်ပါ: " + ", ".join(missing))
+    if not KAGGLE_KEY:
+        st.error("Secrets ထဲမှာ ထည့်ပါ: KAGGLE_KEY")
         return
 
     try:
@@ -353,10 +307,13 @@ def run(force):
         return
 
     with st.status("စစ်ဆေးနေတယ်...", expanded=False) as s:
-        if not force and is_alive(DOMAIN_URL):
-            s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
-            show_link()
-            return
+        # run ပြီးသား link ရှိရင် ပြန်သုံး
+        if not force:
+            ready, error, _, link = read_state()
+            if ready and link and is_alive(link):
+                s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
+                show_link(link)
+                return
 
         try:
             api = KaggleApi()
@@ -380,10 +337,10 @@ def run(force):
             s.update(label="Kaggle စတင်နေတယ်...")
 
         fresh_after = (t_push - 10) if pushed else 0
-        ok = False
+        ok, final_link = False, None
 
         for _ in range(300):
-            ready, error, start_t = read_state()
+            ready, error, start_t, link = read_state()
             fresh = start_t > 0 and start_t >= fresh_after
 
             if fresh and error:
@@ -391,8 +348,8 @@ def run(force):
                 st.error(error)
                 return
 
-            if fresh and ready:
-                ok = True
+            if fresh and ready and link:
+                ok, final_link = True, link
                 break
             time.sleep(2)
 
@@ -401,21 +358,15 @@ def run(force):
             st.warning("Kaggle → Your Work → Logs ကို စစ်ပါ။")
             return
 
-        s.update(label="Domain စစ်နေတယ်...")
-        alive = False
-        for _ in range(20):
-            if is_alive(DOMAIN_URL):
-                alive = True
+        s.update(label="Link စစ်နေတယ်...")
+        for _ in range(10):
+            if is_alive(final_link):
                 break
             time.sleep(3)
 
-        if alive:
-            s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
-        else:
-            s.update(label="Domain မတက်သေးပါ", state="error")
-            st.warning("VPN ဖွင့်ပြီး ပြန်စမ်းပါ၊ ဒါမှမဟုတ် မိနစ်အနည်းငယ်စောင့်ပါ။")
+        s.update(label="အဆင်သင့်ဖြစ်ပြီ", state="complete")
 
-    show_link()
+    show_link(final_link)
 
 
 # ==========================================
