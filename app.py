@@ -3,23 +3,42 @@ import requests
 import streamlit as st
 
 # ==========================================
-# ⚙️ Settings (Key & Username ထည့်ပြီးသား)
+# Settings  (Key ကို code ထဲမထည့်ဘဲ Secrets / Env မှာထားပါ)
 # ==========================================
 KAGGLE_USERNAME = "thetuaiaa"
 KAGGLE_KEY = "KGAT_28b2b967d309484510ffc764b8130e69"
 
 SLUG = "my-link-runner"
-GPU_ENABLED = False  # CPU နဲ့ Run ရန်
+GPU_ENABLED = False
 TOPIC = "kgl-k-7f3a9c2e51b84d06"
 
 os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
 os.environ["KAGGLE_KEY"] = KAGGLE_KEY
 os.environ["KAGGLE_API_TOKEN"] = KAGGLE_KEY
 
-from kaggle.api.kaggle_api_extended import KaggleApi
+st.set_page_config(page_title="Gradio Link", page_icon="🔗", layout="centered")
 
-st.set_page_config(page_title="Kaggle Gradio Link", page_icon="🔗")
-st.title("🔗 Kaggle Gradio Share Link ထုတ်စက်")
+st.markdown(
+    """
+    <style>
+    #MainMenu, footer, header {visibility: hidden;}
+    .block-container {padding-top: 3rem; max-width: 520px;}
+    .hero {text-align: center; margin-bottom: 1.5rem;}
+    .hero h1 {font-size: 1.7rem; margin: 0;}
+    .hero p {opacity: .65; margin: .3rem 0 0; font-size: .95rem;}
+    .stButton > button, .stLinkButton > a {
+        width: 100%; border-radius: 12px; padding: .7rem 1rem; font-weight: 600;
+    }
+    </style>
+    <div class="hero">
+        <h1>🔗 Gradio Link</h1>
+        <p>Kaggle ကနေ share link ထုတ်ပေးမယ်</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+from kaggle.api.kaggle_api_extended import KaggleApi
 
 # ==========================================
 # Kaggle မှာ Run မယ့် Script (Gradio link တစ်ခုတည်း)
@@ -244,7 +263,7 @@ def read_state():
                 name, url = val.split("=", 1)
                 if name == "gradio":
                     links["gradio"] = url
-            elif kind == "cloudflare":  # စနစ်အဟောင်း message များအတွက်
+            elif kind == "cloudflare":
                 links["gradio"] = val
             elif kind == "ready":
                 ready = True
@@ -254,6 +273,7 @@ def read_state():
         pass
     return links, ready, error, start_t
 
+
 def is_alive(url):
     try:
         r = requests.get(url, timeout=10, allow_redirects=True)
@@ -261,8 +281,8 @@ def is_alive(url):
     except Exception:
         return False
 
+
 def kernel_busy(api):
-    """Kaggle kernel run/queue ဖြစ်နေသလား တကယ်စစ်မယ်။"""
     try:
         res = api.kernels_status(f"{KAGGLE_USERNAME}/{SLUG}")
         s = str(getattr(res, "status", res)).lower()
@@ -270,6 +290,7 @@ def kernel_busy(api):
     except Exception as e:
         print("kernel_busy error:", e)
         return False
+
 
 def push_kernel(api):
     code = KAGGLE_SCRIPT.replace("__TOPIC__", TOPIC)
@@ -290,65 +311,73 @@ def push_kernel(api):
         json.dump(meta, f)
     api.kernels_push(folder)
 
-def show_link(status, box, v):
-    status.success("✅ Gradio Link အဆင်သင့်ဖြစ်ပါပြီ!")
-    box.empty()
-    st.markdown(f"### 🔗 [{v}]({v})")
-    st.code(v)
 
-def run(force):
-    status, box = st.empty(), st.empty()
-    api = KaggleApi()
-    api.authenticate()
+def fetch_link(force):
+    """Link ရရင် url ပြန်ပေးမယ်၊ မရရင် None။ Progress ကို st.status ထဲမှာပြမယ်။"""
+    with st.status("ပြင်ဆင်နေတယ်...", expanded=False) as status:
+        api = KaggleApi()
+        api.authenticate()
 
-    if not force:
-        links, _, _, _ = read_state()
-        alive = {k: v for k, v in links.items() if is_alive(v)}
-        if alive:
-            status.success("♻️ အရင် Gradio Link သုံးလို့ရသေးတယ် — အသစ်မထုတ်ပါ")
-            for k, v in alive.items():
-                st.markdown(f"### 🔗 [{v}]({v})")
-                st.code(v)
-            return
+        if not force:
+            links, _, _, _ = read_state()
+            for v in links.values():
+                if is_alive(v):
+                    status.update(label="ရပြီ", state="complete")
+                    return v
 
-    pushed, t_push = False, 0
-    if not force and kernel_busy(api):
-        status.info("⏳ Kaggle session run/စတင်နေတုန်းပါ — link စောင့်နေတယ်...")
-    else:
-        try:
-            push_kernel(api)
-        except Exception as e:
-            status.error(f"Push မအောင်မြင်ပါ: {e}")
-            return
-        pushed, t_push = True, time.time()
-        status.info("⏳ Kaggle စတင်နေတယ်... (Gradio Share ထုတ်နေတယ်)")
+        pushed, t_push = False, 0
+        if not force and kernel_busy(api):
+            status.update(label="Kaggle စတင်နေတုန်း — စောင့်နေတယ်...")
+        else:
+            try:
+                push_kernel(api)
+            except Exception as e:
+                status.update(label="Push မအောင်မြင်ပါ", state="error")
+                st.error(str(e))
+                return None
+            pushed, t_push = True, time.time()
+            status.update(label="Kaggle စတင်နေတယ်...")
 
-    fresh_after = (t_push - 10) if pushed else 0
+        fresh_after = (t_push - 10) if pushed else 0
 
-    for _ in range(600):
-        links, ready, error, start_t = read_state()
-        fresh = start_t > 0 and start_t >= fresh_after
+        for _ in range(600):
+            links, ready, error, start_t = read_state()
+            fresh = start_t > 0 and start_t >= fresh_after
 
-        if fresh and error:
-            status.error(f"❌ Kaggle မှာ error: {error}")
-            return
+            if fresh and error:
+                status.update(label="Error ဖြစ်သွားတယ်", state="error")
+                st.error(error)
+                return None
 
-        if fresh and links:
-            show_link(status, box, list(links.values())[0])
-            return
+            if fresh and links:
+                status.update(label="ရပြီ", state="complete")
+                return list(links.values())[0]
 
-        time.sleep(1)
+            time.sleep(1)
 
-    status.warning("မအောင်မြင်သေးပါ။ Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
+        status.update(label="အချိန်ကုန်သွားပြီ", state="error")
+        st.warning("Kaggle → Your Work → Logs ကို စစ်ကြည့်ပါ။")
+        return None
+
 
 # ==========================================
-# Streamlit UI
+# UI
 # ==========================================
-st.warning("⚠️ ဒီ app မှာ Kaggle API Token ကို hardcode ထည့်ထားပါတယ်။ Public မှာ မတင်ပါနဲ့။")
-st.info("🚀 ဒီစနစ်က **Gradio ရဲ့ ကိုယ်ပိုင် Link** (`.gradio.live`) တစ်ခုတည်းကို ထုတ်ပေးမှာပါ။")
+link = st.session_state.get("link")
 
-if st.button("🚀 Gradio Link ယူမယ်"):
-    run(False)
-
-if st.button("🔄 အသစ်အတင်းထုတ်မယ်"):
-    run(True)
+if not link:
+    if st.button("Link ယူမယ်", type="primary"):
+        url = fetch_link(force=False)
+        if url:
+            st.session_state["link"] = url
+            st.rerun()
+else:
+    st.success("အဆင်သင့်ဖြစ်ပါပြီ")
+    st.code(link, language=None)
+    st.link_button("ဖွင့်မယ်", link, type="primary")
+    if st.button("အသစ်ထုတ်မယ်"):
+        st.session_state["link"] = None
+        url = fetch_link(force=True)
+        if url:
+            st.session_state["link"] = url
+        st.rerun()
