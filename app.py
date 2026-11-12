@@ -5,8 +5,18 @@ import streamlit as st
 # ==========================================
 # Settings  (Key ကို code ထဲမထည့်ဘဲ Secrets / Env မှာထားပါ)
 # ==========================================
-KAGGLE_USERNAME = "thetuaiaa"
-KAGGLE_KEY = "KGAT_28b2b967d309484510ffc764b8130e69"
+def secret_or_env(name):
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    try:
+        return str(st.secrets.get(name, ""))
+    except Exception:
+        return ""
+
+
+KAGGLE_USERNAME = secret_or_env("KAGGLE_USERNAME")
+KAGGLE_KEY = secret_or_env("KAGGLE_KEY")
 
 SLUG = "my-link-runner"
 GPU_ENABLED = False
@@ -107,6 +117,7 @@ def task_pip():
         "pillow": "pillow",
         "requests": "requests",
         "numpy": "numpy",
+            "huggingface_hub": "huggingface_hub",
     }
     missing = []
     for dist, spec in need.items():
@@ -158,6 +169,31 @@ if RES.get("git", (1,))[0] != 0:
     raise SystemExit("git မအောင်မြင်ပါ")
 
 os.chdir(REPO_DIR)
+
+# ---------------------------------------------------------- Nara Mini offline Burmese TTS
+# Download only the ONNX/frontend files needed for local CPU inference.
+NARA_DIR = "/kaggle/working/nara-mini-v1"
+try:
+    from huggingface_hub import snapshot_download
+    if not os.path.isfile(os.path.join(NARA_DIR, "synthesize.py")):
+        say("Nara model download စနေတယ်...")
+        snapshot_download(
+            repo_id="YeeNyunn/nara-mini-v1",
+            local_dir=NARA_DIR,
+            allow_patterns=[
+                "synthesize.py", "requirements.txt", "config.json",
+                "inference_config.json", "frontend/*", "onnx/*/*",
+            ],
+        )
+    rc, out = sh(f"{sys.executable} -m pip install -q -r {NARA_DIR}/requirements.txt")
+    if rc != 0:
+        raise RuntimeError(out[-800:])
+    os.environ["NARA_MODEL_DIR"] = NARA_DIR
+    os.environ.setdefault("NARA_THREADS", "2")
+    say("Nara offline TTS ✅")
+except Exception as ex:
+    say(f"Nara offline TTS ⚠️ မတင်နိုင်သေးပါ: {str(ex)[-500:]}")
+
 if not os.path.exists(APP_FILE):
     post("error", "app.py repo ထဲမှာ မရှိပါ")
     raise SystemExit("app.py မရှိပါ")
@@ -231,6 +267,11 @@ while True:
         print(tail_log())
         break
 '''
+
+# Kaggle credentials must be supplied as environment variables or Streamlit secrets.
+if not KAGGLE_USERNAME or not KAGGLE_KEY:
+    st.error("KAGGLE_USERNAME / KAGGLE_KEY မတွေ့ပါ။ Secrets သို့မဟုတ် environment ထဲထည့်ပါ။")
+    st.stop()
 
 # ==========================================
 # Helpers
