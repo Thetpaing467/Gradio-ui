@@ -3,20 +3,10 @@ import requests
 import streamlit as st
 
 # ==========================================
-# Settings  (Key ကို code ထဲမထည့်ဘဲ Secrets / Env မှာထားပါ)
+# Settings
 # ==========================================
-def secret_or_env(name):
-    value = os.environ.get(name, "")
-    if value:
-        return value
-    try:
-        return str(st.secrets.get(name, ""))
-    except Exception:
-        return ""
-
-
-KAGGLE_USERNAME = secret_or_env("KAGGLE_USERNAME")
-KAGGLE_KEY = secret_or_env("KAGGLE_KEY")
+KAGGLE_USERNAME = "thetuaiaa"
+KAGGLE_KEY = "KGAT_31605077f91a8c94985138dcae838c69"
 
 SLUG = "my-link-runner"
 GPU_ENABLED = False
@@ -51,7 +41,7 @@ st.markdown(
 from kaggle.api.kaggle_api_extended import KaggleApi
 
 # ==========================================
-# Kaggle မှာ Run မယ့် Script (Gradio link တစ်ခုတည်း)
+# Kaggle မှာ Run မယ့် Script
 # ==========================================
 KAGGLE_SCRIPT = r'''
 import os, re, sys, time, subprocess, threading
@@ -94,7 +84,6 @@ post("start", str(time.time()))
 sh("pkill -f '[p]ython.*app.py'")
 time.sleep(0.3)
 
-# ---------------------------------------------------------- App ပြင်ဆင်ခြင်း
 RES = {}
 
 def task_git():
@@ -117,7 +106,7 @@ def task_pip():
         "pillow": "pillow",
         "requests": "requests",
         "numpy": "numpy",
-            "huggingface_hub": "huggingface_hub",
+        "huggingface_hub": "huggingface_hub",
     }
     missing = []
     for dist, spec in need.items():
@@ -170,8 +159,6 @@ if RES.get("git", (1,))[0] != 0:
 
 os.chdir(REPO_DIR)
 
-# ---------------------------------------------------------- Nara Mini offline Burmese TTS
-# Download only the ONNX/frontend files needed for local CPU inference.
 NARA_DIR = "/kaggle/working/nara-mini-v1"
 try:
     from huggingface_hub import snapshot_download
@@ -205,7 +192,6 @@ if fonts:
     )
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
 
-# Gradio launch ကို share=True ဖြစ်အောင် patch လုပ်တဲ့ wrapper
 WRAPPER = """
 import runpy, gradio, sys
 
@@ -231,7 +217,6 @@ app_proc = subprocess.Popen(
 )
 say("app စတင်နေတယ် (Gradio Share)...")
 
-# Link ပေါ်တာနဲ့ ချက်ချင်းပို့မယ်
 GRADIO_LINK_PATTERN = re.compile(r"https://[a-zA-Z0-9\-]+\.gradio\.live")
 ready = False
 
@@ -268,9 +253,8 @@ while True:
         break
 '''
 
-# Kaggle credentials must be supplied as environment variables or Streamlit secrets.
 if not KAGGLE_USERNAME or not KAGGLE_KEY:
-    st.error("KAGGLE_USERNAME / KAGGLE_KEY မတွေ့ပါ။ Secrets သို့မဟုတ် environment ထဲထည့်ပါ။")
+    st.error("KAGGLE_USERNAME / KAGGLE_KEY မတွေ့ပါ။")
     st.stop()
 
 # ==========================================
@@ -354,7 +338,6 @@ def push_kernel(api):
 
 
 def fetch_link(force):
-    """Link ရရင် url ပြန်ပေးမယ်၊ မရရင် None။ Progress ကို st.status ထဲမှာပြမယ်။"""
     with st.status("ပြင်ဆင်နေတယ်...", expanded=False) as status:
         api = KaggleApi()
         api.authenticate()
