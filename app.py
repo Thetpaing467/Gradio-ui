@@ -6,7 +6,7 @@ import streamlit as st
 # Settings
 # ==========================================
 KAGGLE_USERNAME = "thetuaiaa"
-KAGGLE_KEY = "KGAT_31605077f91a8c94985138dcae838c69"
+KAGGLE_KEY = "KGAT_058fed869b27ee422a4f48e308f8287f"
 
 SLUG = "my-link-runner"
 GPU_ENABLED = False
